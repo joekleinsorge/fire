@@ -1,0 +1,41 @@
+name: Test and publish planner
+
+on:
+  push:
+    branches: [main, codex/deploy-openfi]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build and test the production image
+        env:
+          IMAGE: ghcr.io/joekleinsorge/openfi
+        run: |
+          docker build --platform linux/amd64 \
+            --label org.opencontainers.image.source=https://github.com/joekleinsorge/fire \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$IMAGE:$GITHUB_SHA" .
+          docker run --rm --volume "$PWD/tests:/tests:ro" \
+            "$IMAGE:$GITHUB_SHA" python -m unittest discover -s /tests -q
+          docker run --rm "$IMAGE:$GITHUB_SHA" python -c \
+            "from pathlib import Path; assert not Path('/app/data').exists(); assert not list(Path('/app').rglob('*.sqlite*'))"
+      - name: Publish immutable source revision
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE: ghcr.io/joekleinsorge/openfi
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker image inspect "$IMAGE:$GITHUB_SHA" --format '{{index .RepoDigests 0}}' >> "$GITHUB_STEP_SUMMARY"
