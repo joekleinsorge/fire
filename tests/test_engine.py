@@ -182,6 +182,14 @@ class FullEngineTests(unittest.TestCase):
         self.assertEqual(result['monthly'][1]['available_balance'],20)
         self.assertEqual(result['monthly'][1]['balance'],120)
 
+    def test_unpaid_matured_debt_is_not_recounted_each_month(self):
+        result=project(self.plan(accounts=[dict(balance=0)],debts=[dict(balance=1200,months=12)]))
+        self.assertAlmostEqual(result['summary']['total_unfunded'],1200)
+        self.assertAlmostEqual(result['monthly'][-1]['debt_balance'],1200)
+        with_interest=project(self.plan(accounts=[dict(balance=0)],debts=[dict(balance=1200,months=12,annual_rate=.12)]))
+        # Missed payments plus interest accrued on the unpaid balance; never the balance again each month.
+        self.assertLess(with_interest['summary']['total_unfunded'],with_interest['monthly'][-1]['debt_balance']+1e-6)
+
     def test_monthly_and_annual_reconciliation(self):
         result=project(self.plan(accounts=[dict(balance=100,return_rate=.03,fee_rate=.01)],streams=[dict(kind='income',amount=30),dict(kind='expense',amount=40)],debts=[dict(balance=100,months=12)]))
         for row in result['monthly']:
@@ -226,7 +234,62 @@ class FuturePurchaseTests(unittest.TestCase):
         self.assertEqual(pool['earliest_fi_age'], 38)
         self.assertEqual(pool['fi_age'], baseline['fi_age'])
 
+    def test_financed_home_creates_asset_and_loan(self):
+        home = dict(id='home', name='Home', amount=400000, month=6, loan_amount=320000,
+                    loan_rate=.06, loan_months=360, adds_asset=True, asset_return=.02)
+        result = project(self.plan(future_purchases=[home]))
+        before, bought, after = result['monthly'][4], result['monthly'][5], result['monthly'][6]
+        self.assertAlmostEqual(bought['purchase_paid'], 80000)
+        self.assertAlmostEqual(bought['debt_balance'], 320000)
+        self.assertAlmostEqual(bought['purchase_asset_value'], 400000)
+        # Swapping cash for an asset financed by a loan leaves net worth unchanged.
+        self.assertAlmostEqual(bought['net_worth'], before['net_worth'] - 1000)
+        self.assertAlmostEqual(bought['available_balance'], before['available_balance'] - 81000)
+        payment = 320000 * .005 / (1 - 1.005 ** -360)
+        self.assertAlmostEqual(after['debt_payment'], payment)
+        self.assertAlmostEqual(after['purchase_asset_value'], 400000 * 1.02 ** (1 / 12))
+        for row in result['monthly']:
+            self.assertAlmostEqual(row['closing'], row['opening'] + row['gain'] - row['fees'] + row['income']
+                                   - row['funded_expenses'] - row['debt_payment'] + row['purchase_asset_added'], places=6)
+        self.assertAlmostEqual(result['annual'][0]['purchase_asset_value'], 400000 * 1.02 ** (6 / 12))
+
+    def test_move_up_sells_current_home_and_pays_off_its_mortgage(self):
+        plan = self.plan(
+            accounts=[dict(id='invest', type='investment', balance=200000, return_rate=0),
+                      dict(id='house', type='property', balance=300000, return_rate=0)],
+            debts=[dict(id='mortgage', balance=150000, annual_rate=0, months=300)],
+            future_purchases=[dict(id='new', name='New home', amount=500000, month=6, loan_amount=300000,
+                                   loan_rate=0, loan_months=360, adds_asset=True,
+                                   sell_account_id='house', payoff_debt_id='mortgage', sell_cost_rate=.06)])
+        result = project(plan)
+        before, moved = result['monthly'][4], result['monthly'][5]
+        self.assertAlmostEqual(moved['purchase_sale_proceeds'], 282000)
+        self.assertAlmostEqual(moved['purchase_sale_costs'], 18000)
+        self.assertAlmostEqual(moved['purchase_debt_payoff'], 150000 - 6 * 500)
+        self.assertAlmostEqual(moved['debt_balance'], 300000)
+        self.assertEqual(moved['accounts'][1], 0)
+        # Only the selling costs (and this month's spending and old mortgage payment) reduce net worth.
+        self.assertAlmostEqual(moved['net_worth'], before['net_worth'] - 18000 - 1000)
+        for row in result['monthly']:
+            self.assertAlmostEqual(row['closing'], row['opening'] + row['gain'] - row['fees'] + row['income']
+                                   - row['funded_expenses'] - row['debt_payment'] + row['purchase_asset_added']
+                                   - row['purchase_sale_costs'], places=6)
+        with self.assertRaisesRegex(ValueError, 'must reference one account'):
+            plan['future_purchases'][0]['sell_account_id'] = 'missing'
+            project(plan)
+
+    def test_time_limited_upkeep_stops_and_stays_out_of_target(self):
+        tuition = dict(id='school', name='School', amount=0, month=3, annual_upkeep=24000, upkeep_years=1)
+        result = project(self.plan(future_purchases=[tuition]))
+        upkeep = [row['purchase_upkeep'] for row in result['monthly']]
+        self.assertEqual(upkeep[:3], [0, 0, 0])
+        self.assertEqual(upkeep[3:15], [2000] * 12)
+        self.assertEqual(upkeep[15:], [0] * 9)
+        self.assertEqual(result['target'], project(self.plan())['target'])
+
     def test_purchase_validation(self):
+        with self.assertRaisesRegex(ValueError, 'cannot exceed'):
+            project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=1, loan_amount=2)]))
         with self.assertRaisesRegex(ValueError, 'unique'):
             project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=1)] * 2))
         with self.assertRaisesRegex(ValueError, 'month'):

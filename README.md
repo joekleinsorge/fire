@@ -23,7 +23,7 @@ For Docker, run `docker compose up --build` and open the same URL. The Compose v
 - Retirement assumptions and seeded simulations with annual percentile bands and separate essential-spending, desired-lifestyle, and portfolio-survival outcomes.
 - Saved plans with revisions, scenarios, comparisons, progress observations, and JSON import/export. CSV export and browser printing are also available.
 - Child profiles with separate 529 education and Trump Account forecasts; child assets stay outside a parent's spendable balance and FI target, while household-funded contributions reduce household cash flow.
-- Future purchases (a pool, home project, school bill) with one-time cost and ongoing upkeep, plus purchase scenarios that save a full plan copy with its baseline for side-by-side comparison.
+- Future purchases (a pool, a new home, tuition) with one-time cost, ongoing or time-limited upkeep, optional financing, a resulting property asset, and sale of an existing home with mortgage payoff, plus purchase scenarios that save a full plan copy with its baseline for side-by-side comparison.
 - Local accounts, household isolation, and role-based plan access.
 
 ## Model boundaries
