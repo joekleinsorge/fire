@@ -1,0 +1,25 @@
+{{- if .Values.backup.enabled }}
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: openfi-data
+  namespace: openfi
+spec:
+  sourcePVC: openfi-data
+  trigger:
+    schedule: {{ .Values.backup.schedule | quote }}
+  restic:
+    repository: {{ .Values.backup.repositorySecret }}
+    copyMethod: Snapshot
+    moverSecurityContext:
+      runAsUser: 10001
+      runAsGroup: 10001
+      runAsNonRoot: true
+      fsGroup: 10001
+      seccompProfile: {type: RuntimeDefault}
+    moverResources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 250m, memory: 512Mi}
+    pruneIntervalDays: 14
+    retain: {hourly: 4, daily: 7, weekly: 4, monthly: 6, yearly: 2}
+{{- end }}

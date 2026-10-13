@@ -1,0 +1,18 @@
+# Set to the published linux/amd64 image digest before reconciling this chart.
+image: ""
+imagePullSecrets: []
+storageClass: longhorn
+storageSize: 2Gi
+# Keep serving disabled until the private SQLite database is installed.
+replicas: 0
+route:
+  enabled: false
+  hostname: fi.kleinsorge.dev
+  gatewayName: freshlab
+  gatewayNamespace: istio-system
+  dnsTarget: 192.168.1.228
+backup:
+  enabled: false
+  # Provision via Freshlab's SOPS secret workflow; never put credentials here.
+  repositorySecret: openfi-data-volsync-restic
+  schedule: "47 2,8,14,20 * * *"

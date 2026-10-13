@@ -235,13 +235,15 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     debt_rows = []
     for debt in debts:
         balance = number(debt.get('balance', 0), 'debt balance', 0, 1e15)
+        balance_only = flag(debt, 'balance_only', False)
         rate = number(debt.get('annual_rate', 0), 'debt annual_rate', 0, 10) / 12
         months = number(debt.get('months', 360), 'debt months', 1, 1800, True)
         payment = balance * rate / (1 - (1 + rate) ** -months) if rate else balance / months
         if debt.get('payment') is not None:
             payment = number(debt['payment'], 'debt payment', 0, 1e15)
         debt_rows.append(dict(balance=balance, rate=rate, payment=payment,
-            extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance))
+            extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance,
+            balance_only=balance_only))
     initial_debt = sum(d['balance'] for d in debt_rows)
     # Financed purchases originate a debt in the purchase month; payments start the month after.
     for item in purchases:
@@ -333,6 +335,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         debt_payment = debt_due = debt_unfunded = debt_interest = debt_principal = 0.0
         debt_ledger = []
         for debt in debt_rows:
+            if debt.get('balance_only'):
+                debt_ledger.append(dict(opening=debt['balance'], interest=0, due=0, payment=0,
+                                        principal=0, unfunded=0, balance=debt['balance'], balance_only=True))
+                continue
             if month <= debt['origin']:
                 continue
             debt_open = debt['balance']

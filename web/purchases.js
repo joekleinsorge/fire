@@ -1,6 +1,10 @@
 'use strict';
 let purchaseEditId=null,purchaseMode='fork',purchaseBase=null,purchaseBaseFingerprint=null;
 function purchaseMonthLabel(month,p=plan){const parts=String(p.valuation_date||valuationDate()).split('-').map(Number),date=new Date(parts[0],parts[1]-1+Number(month),1);return date.toLocaleDateString(undefined,{month:'short',year:'numeric'})}
+// Purchases store a month offset from the plan baseline; the dialog edits it as a calendar month.
+function baselineParts(p=plan){return String(p.valuation_date||valuationDate()).split('-').map(Number)}
+function offsetToMonth(offset,p=plan){const [y,m]=baselineParts(p),d=new Date(y,m-1+Number(offset),1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
+function monthToOffset(value,p=plan){const [y,m]=baselineParts(p),[vy,vm]=String(value).split('-').map(Number);return (vy-y)*12+(vm-m)}
 function renderPurchases(){
   const rows=plan.future_purchases||[];
   $('purchase-baseline').textContent=`Baseline ${plan.valuation_date||valuationDate()}. Month 1 is ${purchaseMonthLabel(1)}; all dates move with the baseline.`;
@@ -11,14 +15,14 @@ function openPurchase(mode,id){
   purchaseMode=mode;purchaseEditId=id||null;purchaseBase=structuredClone(plan);purchaseBaseFingerprint=JSON.stringify(plan);
   const row=(plan.future_purchases||[]).find(p=>p.id===id),fork=mode==='fork';
   $('purchase-dialog-title').textContent=fork?'Try a purchase scenario':row?'Edit future purchase':'Add to current plan';
-  $('purchase-name').value=row?.name||'';$('purchase-amount').value=row?.amount??'';$('purchase-month').value=row?.month??Math.min(24,plan.horizon*12);$('purchase-month').max=plan.horizon*12;
+  $('purchase-name').value=row?.name||'';$('purchase-amount').value=row?.amount??'';$('purchase-month').value=offsetToMonth(row?.month??Math.min(24,plan.horizon*12));$('purchase-month').min=offsetToMonth(1);$('purchase-month').max=offsetToMonth(plan.horizon*12);
   $('purchase-upkeep').value=row?.annual_upkeep??0;$('purchase-upkeep-years').value=row?.upkeep_years??'';$('purchase-loan').value=row?.loan_amount??0;$('purchase-loan-rate').value=((row?.loan_rate??.06)*100).toFixed(2);$('purchase-loan-years').value=Math.round((row?.loan_months??360)/12);$('purchase-asset').checked=!!row?.adds_asset;$('purchase-sell').innerHTML='<option value="">Nothing</option>'+(plan.accounts||[]).filter(a=>a.id).map(a=>`<option value="${esc(a.id)}">${esc(a.name)} · ${money(a.balance)}</option>`).join('');$('purchase-sell').value=row?.sell_account_id||'';$('purchase-sell-cost').value=((row?.sell_cost_rate??.06)*100).toFixed(1);$('purchase-payoff').innerHTML='<option value="">None</option>'+(plan.debts||[]).filter(d=>d.id).map(d=>`<option value="${esc(d.id)}">${esc(d.name)} · ${money(d.balance)}</option>`).join('');$('purchase-payoff').value=row?.payoff_debt_id||'';$('purchase-asset-return').value=((row?.asset_return??0)*100).toFixed(1);$('purchase-enabled').checked=row?.enabled!==false;
   $('purchase-scenario-label').hidden=!fork;$('purchase-scenario-name').required=fork;$('purchase-scenario-name').value='';
   $('purchase-submit').textContent=fork?'Save scenario & compare':'Apply & recalculate';
   $('purchase-mode-note').textContent=fork?'Save a full independent plan and its starting baseline. Your current plan stays as it is. Signed-in scenarios persist with the saved plan; signed-out scenarios last only in this tab.':'Apply this expense to your working plan. The forecast will be recalculated before the change is accepted.';
   updatePurchaseTiming();$('purchase-dialog').showModal();
 }
-function updatePurchaseTiming(){$('purchase-timing').textContent=`${purchaseMonthLabel($('purchase-month').value,purchaseBase||plan)} · baseline ${(purchaseBase||plan).valuation_date}`}
+function updatePurchaseTiming(){const p=purchaseBase||plan,offset=monthToOffset($('purchase-month').value,p);$('purchase-timing').textContent=Number.isFinite(offset)&&offset>=1?`${offset} month${offset===1?'':'s'} after your ${p.valuation_date} baseline`:`Choose a month after your ${p.valuation_date} baseline`}
 $('purchase-month').oninput=updatePurchaseTiming;
 $('add-purchase').onclick=()=>openPurchase('current');$('fork-purchase').onclick=()=>openPurchase('fork');
 $('purchase-close').onclick=$('purchase-cancel').onclick=()=>$('purchase-dialog').close();
@@ -46,7 +50,7 @@ $('purchase-form').onsubmit=async e=>{
   e.preventDefault();if(!$('purchase-form').reportValidity())return;
   const button=$('purchase-submit');button.disabled=true;
   try{
-    const row={id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:Number($('purchase-month').value),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
+    const row={id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
     const years=$('purchase-upkeep-years').value.trim(),loan=Number($('purchase-loan').value||0);
     if(years)row.upkeep_years=Number(years);
     if(loan){row.loan_amount=loan;row.loan_rate=Number($('purchase-loan-rate').value)/100;row.loan_months=Number($('purchase-loan-years').value)*12}
@@ -54,6 +58,7 @@ $('purchase-form').onsubmit=async e=>{
     if($('purchase-payoff').value){if(!row.sell_account_id)throw Error('Choose an asset to sell before paying off a debt from the sale.');row.payoff_debt_id=$('purchase-payoff').value}
     if($('purchase-asset').checked){row.adds_asset=true;row.asset_return=Number($('purchase-asset-return').value)/100}
     if(!row.name)throw Error('Enter a purchase name.');
+    if(!Number.isInteger(row.month)||row.month<1)throw Error('Choose a purchase month after the plan baseline.');
     if(loan>row.amount)throw Error('The amount borrowed cannot exceed the purchase cost.');
     const candidate=structuredClone(purchaseBase),rows=candidate.future_purchases||[],index=rows.findIndex(p=>p.id===row.id);if(index<0)rows.push(row);else rows[index]=row;candidate.future_purchases=rows;
     if(purchaseMode==='fork'){
