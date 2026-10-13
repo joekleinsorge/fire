@@ -20,7 +20,7 @@ function openPurchase(mode,id){
   $('purchase-scenario-label').hidden=!fork;$('purchase-scenario-name').required=fork;$('purchase-scenario-name').value='';
   $('purchase-submit').textContent=fork?'Save scenario & compare':'Apply & recalculate';
   $('purchase-mode-note').textContent=fork?'Save a full independent plan and its starting baseline. Your current plan stays as it is. Signed-in scenarios persist with the saved plan; signed-out scenarios last only in this tab.':'Apply this expense to your working plan. The forecast will be recalculated before the change is accepted.';
-  updatePurchaseTiming();$('purchase-dialog').showModal();
+  $('purchase-advanced').open=!!(row?.loan_amount||row?.sell_account_id||row?.adds_asset);updatePurchaseTiming();previewBase=null;previewRequest++;$('purchase-dialog').showModal();updatePurchasePreview();
 }
 function updatePurchaseTiming(){const p=purchaseBase||plan,offset=monthToOffset($('purchase-month').value,p);$('purchase-timing').textContent=Number.isFinite(offset)&&offset>=1?`${offset} month${offset===1?'':'s'} after your ${p.valuation_date} baseline`:`Choose a month after your ${p.valuation_date} baseline`}
 $('purchase-month').oninput=updatePurchaseTiming;
@@ -46,21 +46,47 @@ async function acceptPurchasePlan(candidate,startingFingerprint){
   plan=candidate;touch();projection=result;simulation=null;renderTables();
   $('save-state').textContent='Unsaved changes · projection current';$('save-state').classList.add('dirty');
 }
+function readPurchaseRow(forPreview=false){
+  const row={id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
+  const years=$('purchase-upkeep-years').value.trim(),loan=Number($('purchase-loan').value||0);
+  if(years)row.upkeep_years=Number(years);
+  if(loan){row.loan_amount=loan;row.loan_rate=Number($('purchase-loan-rate').value)/100;row.loan_months=Number($('purchase-loan-years').value)*12}
+  if($('purchase-sell').value){row.sell_account_id=$('purchase-sell').value;row.sell_cost_rate=Number($('purchase-sell-cost').value)/100}
+  if($('purchase-payoff').value){if(!row.sell_account_id)throw Error('Choose an asset to sell before paying off a debt from the sale.');row.payoff_debt_id=$('purchase-payoff').value}
+  if($('purchase-asset').checked){row.adds_asset=true;row.asset_return=Number($('purchase-asset-return').value)/100}
+  if(!row.name){if(!forPreview)throw Error('Enter a purchase name.');row.name='Preview'}
+  if(!Number.isInteger(row.month)||row.month<1)throw Error('Choose a purchase month after the plan baseline.');
+  if(loan>row.amount)throw Error('The amount borrowed cannot exceed the purchase cost.');
+  return row;
+}
+function purchaseCandidate(row){const candidate=structuredClone(purchaseBase),rows=candidate.future_purchases||[],index=rows.findIndex(p=>p.id===row.id);if(index<0)rows.push(row);else rows[index]=row;candidate.future_purchases=rows;return candidate}
+// Live preview: re-project the candidate as the dialog changes; stale responses are dropped.
+let previewTimer=null,previewRequest=0,previewBase=null;
+function previewAge(value){return value==null?'not reached':`age ${value}`}
+function previewDelta(before,after,unit){if(before==null||after==null||before===after)return '';const d=after-before;return ` (${d>0?'+':''}${unit==='years'?`${d} year${Math.abs(d)===1?'':'s'}`:money(d)})`}
+async function updatePurchasePreview(){
+  const box=$('purchase-preview'),request=++previewRequest;
+  let row;try{row=readPurchaseRow(true)}catch(err){box.className='purchase-preview muted';box.textContent=$('purchase-amount').value?err.message:'Enter a cost and month to preview the effect on your plan.';return}
+  if(!$('purchase-amount').value){box.className='purchase-preview muted';box.textContent='Enter a cost and month to preview the effect on your plan.';return}
+  box.className='purchase-preview muted';box.textContent='Updating preview…';
+  try{
+    const [base,next]=await Promise.all([previewBase||(previewBase=projectPlan(purchaseBase)),projectPlan(purchaseCandidate(row))]);
+    if(request!==previewRequest)return;
+    const short=r=>r.summary?.first_shortfall_age==null?null:Math.floor(r.summary.first_shortfall_age),lines=[
+      next.earliest_fi_age==null?`Assets <strong>never reach</strong> your FI target${base.earliest_fi_age!=null?` (now ${previewAge(base.earliest_fi_age)})`:''}`:`Assets reach your FI target at <strong>${previewAge(next.earliest_fi_age)}</strong>${previewDelta(base.earliest_fi_age,next.earliest_fi_age,'years')}`,
+      `FI target <strong>${money(next.target)}</strong>${previewDelta(base.target,next.target)}`,
+      `Spendable at planned retirement <strong>${money(next.summary?.retirement_available_balance)}</strong>${previewDelta(base.summary?.retirement_available_balance,next.summary?.retirement_available_balance)}`];
+    if(short(next)!=null)lines.push(`<span class="danger-text">Money first runs short at age ${short(next)}</span>`);
+    box.className='purchase-preview'+(short(next)!=null?' warn':'');box.innerHTML=`<span class="eyebrow">PREVIEW · NOT SAVED</span>${lines.map(l=>`<span>${l}</span>`).join('')}`;
+  }catch(err){if(request===previewRequest){box.className='purchase-preview muted';box.textContent=err.message}}
+}
+$('purchase-form').addEventListener('input',()=>{clearTimeout(previewTimer);previewTimer=setTimeout(updatePurchasePreview,350)});
+$('purchase-form').addEventListener('change',()=>{clearTimeout(previewTimer);previewTimer=setTimeout(updatePurchasePreview,150)});
 $('purchase-form').onsubmit=async e=>{
   e.preventDefault();if(!$('purchase-form').reportValidity())return;
   const button=$('purchase-submit');button.disabled=true;
   try{
-    const row={id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
-    const years=$('purchase-upkeep-years').value.trim(),loan=Number($('purchase-loan').value||0);
-    if(years)row.upkeep_years=Number(years);
-    if(loan){row.loan_amount=loan;row.loan_rate=Number($('purchase-loan-rate').value)/100;row.loan_months=Number($('purchase-loan-years').value)*12}
-    if($('purchase-sell').value){row.sell_account_id=$('purchase-sell').value;row.sell_cost_rate=Number($('purchase-sell-cost').value)/100}
-    if($('purchase-payoff').value){if(!row.sell_account_id)throw Error('Choose an asset to sell before paying off a debt from the sale.');row.payoff_debt_id=$('purchase-payoff').value}
-    if($('purchase-asset').checked){row.adds_asset=true;row.asset_return=Number($('purchase-asset-return').value)/100}
-    if(!row.name)throw Error('Enter a purchase name.');
-    if(!Number.isInteger(row.month)||row.month<1)throw Error('Choose a purchase month after the plan baseline.');
-    if(loan>row.amount)throw Error('The amount borrowed cannot exceed the purchase cost.');
-    const candidate=structuredClone(purchaseBase),rows=candidate.future_purchases||[],index=rows.findIndex(p=>p.id===row.id);if(index<0)rows.push(row);else rows[index]=row;candidate.future_purchases=rows;
+    const candidate=purchaseCandidate(readPurchaseRow());
     if(purchaseMode==='fork'){
       const name=$('purchase-scenario-name').value.trim();if(!name)throw Error('Enter a scenario name.');candidate.name=name;
       const results=await Promise.all([projectPlan(purchaseBase),projectPlan(candidate)]);

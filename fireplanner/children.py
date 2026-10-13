@@ -8,8 +8,19 @@ import math
 import re
 
 
+# Statutory caps for 2026–2027. Later caps are indexed for inflation; because
+# forecasts are in constant plan-start dollars, they are assumed to stay at the
+# same real amount.
 TRUMP_GENERAL_CAP = {2026: 5000.0, 2027: 5000.0}
 TRUMP_EMPLOYER_CAP = {2026: 2500.0, 2027: 2500.0}
+
+
+def trump_general_cap(year):
+    return TRUMP_GENERAL_CAP.get(year, TRUMP_GENERAL_CAP[2027])
+
+
+def trump_employer_cap(year):
+    return TRUMP_EMPLOYER_CAP.get(year, TRUMP_EMPLOYER_CAP[2027])
 TRUMP_PILOT_YEARS = {2026, 2027, 2028}
 
 
@@ -146,8 +157,9 @@ def project(plan, horizon, initialize_only=False):
         else:
             if raw.get('education_annual_withdrawal', 0):
                 raise ValueError('education withdrawals are modeled only for 529 accounts')
-            start = _number(raw.get('start_year', 2026), 'Trump start_year', 2026, 2027, True)
-            end = _number(raw.get('end_year', 2027), 'Trump end_year', 2026, 2027, True)
+            growth_period_end_year = date.fromisoformat(members_by_id[beneficiary_id]['birth_date']).year + 17
+            start = _number(raw.get('start_year', max(2026, first_year)), 'Trump start_year', 2026, 9998, True)
+            end = _number(raw.get('end_year', growth_period_end_year), 'Trump end_year', 2026, 9999, True)
             if end < start:
                 raise ValueError('Trump end_year must be at or after start_year')
             employer = _number(raw.get('employer_contribution', 0), 'employer_contribution')
@@ -164,7 +176,6 @@ def project(plan, horizon, initialize_only=False):
                 raise ValueError('employer_contributor_id is required for employer contributions')
             if employer_contributor_id is not None:
                 employer_contributor_id = _id(employer_contributor_id, 'employer_contributor_id')
-            growth_period_end_year = date.fromisoformat(members_by_id[beneficiary_id]['birth_date']).year + 17
             if start > growth_period_end_year:
                 raise ValueError('Trump Account contribution schedule starts after the beneficiary growth period ends')
             if end > growth_period_end_year:
@@ -189,18 +200,17 @@ def project(plan, horizon, initialize_only=False):
         if account['pilot_contribution']:
             key = account['beneficiary_id']
             pilot_receipts[key] = pilot_receipts.get(key, 0.0) + account['pilot_contribution']
-        for year in TRUMP_GENERAL_CAP:
-            if account['start_year'] <= year <= account['end_year']:
-                total = account['annual_contribution'] + account['employer_contribution']
-                key = account['beneficiary_id'], year
-                beneficiary_contributions[key] = beneficiary_contributions.get(key, 0.0) + total
-                if contributor and account['employer_contribution']:
-                    key = contributor, year
-                    employer_contributions[key] = employer_contributions.get(key, 0.0) + account['employer_contribution']
-    if any(total > TRUMP_GENERAL_CAP[year] for (_, year), total in beneficiary_contributions.items()):
-        raise ValueError('Trump Account contributions exceed the $5,000 aggregate annual cap for 2026 or 2027')
-    if any(total > TRUMP_EMPLOYER_CAP[year] for (_, year), total in employer_contributions.items()):
-        raise ValueError('employer Trump Account contributions exceed the $2,500 per-employee annual cap for 2026 or 2027')
+        for year in range(account['start_year'], account['end_year'] + 1):
+            total = account['annual_contribution'] + account['employer_contribution']
+            key = account['beneficiary_id'], year
+            beneficiary_contributions[key] = beneficiary_contributions.get(key, 0.0) + total
+            if contributor and account['employer_contribution']:
+                key = contributor, year
+                employer_contributions[key] = employer_contributions.get(key, 0.0) + account['employer_contribution']
+    if any(total > trump_general_cap(year) for (_, year), total in beneficiary_contributions.items()):
+        raise ValueError('Trump Account contributions exceed the $5,000 aggregate annual cap (in today\'s dollars)')
+    if any(total > trump_employer_cap(year) for (_, year), total in employer_contributions.items()):
+        raise ValueError('employer Trump Account contributions exceed the $2,500 per-employee annual cap (in today\'s dollars)')
     if any(total > 1000 for total in pilot_receipts.values()):
         raise ValueError('pilot contribution may be entered only once per beneficiary')
 
@@ -215,7 +225,7 @@ def project(plan, horizon, initialize_only=False):
         'Child accounts are forecast separately and excluded from parent investable assets, net worth, and FI target.',
         'Year-end real-dollar approximation: annual return and fee, contributions, and education withdrawals are applied at year end; first-year growth is prorated to December; inflation is not modeled.',
         '529 contribution limits, qualified-expense rules, state tax treatment, and plan-specific caps are not evaluated; education withdrawals are user-entered estimates.',
-        'Trump Account eligibility, tax treatment, investment eligibility, and pilot eligibility are not determined. 2026–2027 general and employer caps are checked; future indexed caps are not modeled.',
+        'Trump Account eligibility, tax treatment, investment eligibility, and pilot eligibility are not determined. General ($5,000) and employer ($2,500) caps are checked every year through the year the child turns 17; caps after 2027 are indexed for inflation and assumed to stay at the same amount in today’s dollars.',
     ]
     result = dict(members=members, child_accounts=accounts, annual=annual_rows, summary=totals,
                 coverage='Simplified year-end real-dollar forecast; no eligibility or tax determinations.',
