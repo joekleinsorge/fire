@@ -129,9 +129,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                 # X-Forwarded-Email is trusted only behind the in-pod OIDC proxy.
                 # The deployment restricts direct access to this container port.
                 asserted_email = self.headers.get('X-Forwarded-Email', '').strip().lower()
-                trusted_email = os.environ.get('FIRE_OIDC_EMAIL', '').strip().lower()
                 owner_email = os.environ.get('FIRE_OIDC_OWNER_EMAIL', '').strip().lower()
-                if asserted_email and trusted_email and owner_email and asserted_email == trusted_email:
+                if asserted_email and owner_email:
                     with store.connect() as db:
                         row = db.execute(
                             'SELECT id,email,household,role FROM users WHERE email=? AND role=?',

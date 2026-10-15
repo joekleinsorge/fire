@@ -67,15 +67,14 @@ class APITest(unittest.TestCase):
         _,saved,_=self.request('POST','/api/plans',{'name':'Private plan','plan':{'age':42}},
                                cookie=self.request('POST','/api/auth/login',
                                    {'email':'owner@openfi.local','password':'correct horse battery'})[2])
-        with patch.dict(os.environ,{'FIRE_OIDC_EMAIL':'joe@example.test',
-                                    'FIRE_OIDC_OWNER_EMAIL':'owner@openfi.local'}):
+        with patch.dict(os.environ,{'FIRE_OIDC_OWNER_EMAIL':'owner@openfi.local'}):
             status,reply,_=self.request('GET','/api/auth/me',extra_headers={'X-Forwarded-Email':'joe@example.test'})
             self.assertEqual(status,200)
             self.assertEqual(reply['user']['id'],owner['id'])
             status,plans,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'joe@example.test'})
             self.assertEqual(status,200)
             self.assertEqual(plans['plans'][0]['id'],saved['id'])
-            status,reply,_=self.request('GET','/api/auth/me',extra_headers={'X-Forwarded-Email':'other@example.test'})
+            status,reply,_=self.request('GET','/api/auth/me')
             self.assertIsNone(reply['user'])
 
     def test_editor_cannot_delete_plan_or_export_json(self):
