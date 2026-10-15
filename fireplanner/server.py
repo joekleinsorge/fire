@@ -125,6 +125,18 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                     raise LookupError('Not found')
                 return self.send(200,candidate.read_bytes(),mimetypes.guess_type(str(candidate))[0] or 'application/octet-stream')
             user = store.user(self.token())
+            if not user:
+                # X-Forwarded-Email is trusted only behind the in-pod OIDC proxy.
+                # The deployment restricts direct access to this container port.
+                asserted_email = self.headers.get('X-Forwarded-Email', '').strip().lower()
+                trusted_email = os.environ.get('FIRE_OIDC_EMAIL', '').strip().lower()
+                owner_email = os.environ.get('FIRE_OIDC_OWNER_EMAIL', '').strip().lower()
+                if asserted_email and trusted_email and owner_email and asserted_email == trusted_email:
+                    with store.connect() as db:
+                        row = db.execute(
+                            'SELECT id,email,household,role FROM users WHERE email=? AND role=?',
+                            (owner_email, 'owner')).fetchone()
+                    user = dict(row) if row else None
             if path == '/api/auth/me' and self.command=='GET':
                 # Signed-out callers get an explicit null user rather than an error.
                 return self.send(200,{'user':user or None})
