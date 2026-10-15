@@ -5,6 +5,19 @@
 {{- if not (has (int .Values.replicas) (list 0 1)) -}}
 {{- fail "SQLite deployment supports only zero or one replica" -}}
 {{- end -}}
+{{- $auth := .Values.auth -}}
+{{- if $auth.enabled -}}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $auth.proxyImage) -}}
+{{- fail "auth.proxyImage must use an immutable sha256 digest" -}}
+{{- end -}}
+{{- required "Set auth.issuerURL to the OIDC issuer URL" $auth.issuerURL -}}
+{{- required "Set auth.clientID to the OIDC client ID" $auth.clientID -}}
+{{- required "Set auth.ownerEmail to the existing owner account email" $auth.ownerEmail -}}
+{{- required "Set auth.secretName to a Secret with client-secret, cookie-secret, and allowed-emails keys" $auth.secretName -}}
+{{- if empty $auth.egress -}}
+{{- fail "auth.enabled requires auth.egress NetworkPolicy rules for DNS and the OIDC issuer" -}}
+{{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -66,15 +79,20 @@ spec:
             capabilities:
               drop: [ALL]
           env:
-            - {name: FIRE_HOST, value: "0.0.0.0"}
-            - {name: FIRE_PORT, value: "8080"}
+            - name: FIRE_HOST
+              value: {{ ternary "127.0.0.1" "0.0.0.0" $auth.enabled | quote }}
+            - name: FIRE_PORT
+              value: {{ ternary "8081" "8080" $auth.enabled | quote }}
             - {name: FIRE_DB, value: /data/planner.sqlite3}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            {{- if $auth.enabled }}
+            - name: FIRE_OIDC_OWNER_EMAIL
+              value: {{ $auth.ownerEmail | lower | quote }}
+            {{- end }}
           ports:
-            - {name: http, containerPort: 8080}
-          resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: "1", memory: 512Mi}
+            - name: {{ ternary "planner-internal" "http" $auth.enabled }}
+              containerPort: {{ ternary 8081 8080 $auth.enabled }}
+          {{- if not $auth.enabled }}
           startupProbe:
             httpGet: {path: /api/health, port: http}
             periodSeconds: 2
@@ -84,14 +102,77 @@ spec:
           livenessProbe:
             httpGet: {path: /api/health, port: http}
             periodSeconds: 30
+          {{- end }}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: tmp, mountPath: /tmp}
+      {{- if $auth.enabled }}
+        - name: oauth2-proxy
+          image: {{ $auth.proxyImage | quote }}
+          args:
+            - --provider=oidc
+            - {{ printf "--oidc-issuer-url=%s" $auth.issuerURL | quote }}
+            - {{ printf "--client-id=%s" $auth.clientID | quote }}
+            - --client-secret-file=/run/oauth2-proxy/client-secret
+            - --cookie-secret-file=/run/oauth2-proxy/cookie-secret
+            - --cookie-name=__Host-openfi
+            - --cookie-secure=true
+            - --cookie-httponly=true
+            - --cookie-samesite=lax
+            - {{ printf "--redirect-url=https://%s/oauth2/callback" .Values.route.hostname | quote }}
+            - --authenticated-emails-file=/run/oauth2-proxy/allowed-emails
+            - --scope=openid email profile
+            - --upstream=http://127.0.0.1:8081/
+            - --http-address=0.0.0.0:8080
+            - --reverse-proxy=false
+            - --pass-user-headers=true
+            - --pass-basic-auth=false
+            - --pass-access-token=false
+            - --skip-auth-route=GET=^/api/health$
+            - --skip-auth-route=GET=^/api/auth/me$
+            - --silence-ping-logging=true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop: [ALL]
+          ports:
+            - {name: proxy, containerPort: 8080}
+          startupProbe:
+            httpGet: {path: /api/health, port: proxy}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /api/health, port: proxy}
+          livenessProbe:
+            httpGet: {path: /api/health, port: proxy}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: oauth2-proxy-secret, mountPath: /run/oauth2-proxy, readOnly: true}
+      {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim: {claimName: openfi-data}
         - name: tmp
           emptyDir: {sizeLimit: 64Mi}
+        {{- if $auth.enabled }}
+        - name: oauth2-proxy-secret
+          secret:
+            secretName: {{ $auth.secretName }}
+            items:
+              - {key: client-secret, path: client-secret}
+              - {key: cookie-secret, path: cookie-secret}
+              - {key: allowed-emails, path: allowed-emails}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -102,7 +183,9 @@ spec:
   selector:
     app.kubernetes.io/name: openfi
   ports:
-    - {name: http, port: 80, targetPort: http}
+    - name: http
+      port: 80
+      targetPort: {{ ternary "proxy" "http" $auth.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -114,7 +197,19 @@ spec:
     matchLabels:
       app.kubernetes.io/name: openfi
   policyTypes: [Ingress, Egress]
+  {{- if $auth.enabled }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+      {{- toYaml $auth.egress | nindent 4 }}
+  {{- else }}
   egress: []
+  {{- end }}
   ingress:
     - from:
         - namespaceSelector:

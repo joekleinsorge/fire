@@ -2,5 +2,5 @@ apiVersion: v2
 name: openfi
 description: Single-process private Open FI planner for Freshlab
 type: application
-version: 0.1.0
-appVersion: "2.0.0"
+version: 0.2.0
+appVersion: "2.1.0"

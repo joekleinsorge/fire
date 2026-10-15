@@ -1,9 +1,11 @@
 import http.client
 import json
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from fireplanner.server import make_server
 
 
@@ -16,10 +18,11 @@ class APITest(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join(); self.tmp.cleanup()
 
-    def request(self,method,path,data=None,cookie='',origin=None):
+    def request(self,method,path,data=None,cookie='',origin=None,extra_headers=None):
         conn=http.client.HTTPConnection(*self.server.server_address)
         headers={'Content-Type':'application/json','Cookie':cookie}
         if origin: headers['Origin']=origin
+        if extra_headers: headers.update(extra_headers)
         conn.request(method,path,json.dumps(data) if data is not None else None,headers)
         response=conn.getresponse(); raw=response.read()
         result=raw.decode() if response.getheader('Content-Type','').startswith('text/csv') else json.loads(raw)
@@ -58,6 +61,32 @@ class APITest(unittest.TestCase):
         self.assertEqual(self.request('DELETE',f"/api/plans/{plan['id']}",{},ca)[0],403)
         self.assertEqual(self.request('POST','/api/auth/logout',{},ca,origin='https://attacker.example')[0],403)
         self.assertIn('HttpOnly',ca); self.assertIn('SameSite=Strict',ca)
+
+    def test_trusted_oidc_identity_maps_to_existing_owner(self):
+        owner,_=self.register('owner@openfi.local')
+        _,saved,_=self.request('POST','/api/plans',{'name':'Private plan','plan':{'age':42}},
+                               cookie=self.request('POST','/api/auth/login',
+                                   {'email':'owner@openfi.local','password':'correct horse battery'})[2])
+        with patch.dict(os.environ,{'FIRE_OIDC_OWNER_EMAIL':'owner@openfi.local'}):
+            status,reply,_=self.request('GET','/api/auth/me',extra_headers={'X-Forwarded-Email':'OWNER@openfi.local'})
+            self.assertEqual(status,200)
+            self.assertTrue(reply['oidc'])
+            self.assertEqual(reply['user']['id'],owner['id'])
+            status,oidc,_=self.request('GET','/api/auth/oidc',extra_headers={'X-Forwarded-Email':'owner@openfi.local'})
+            self.assertEqual(status,200)
+            self.assertEqual(oidc['user']['id'],owner['id'])
+            status,plans,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'owner@openfi.local'})
+            self.assertEqual(status,200)
+            self.assertEqual(plans['plans'][0]['id'],saved['id'])
+            status,_reply,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'joe@example.test'})
+            self.assertEqual(status,401)
+            status,reply,_=self.request('GET','/api/auth/me')
+            self.assertIsNone(reply['user'])
+
+    def test_oidc_owner_mode_refuses_a_non_loopback_bind(self):
+        with patch.dict(os.environ,{'FIRE_OIDC_OWNER_EMAIL':'owner@example.com'}):
+            with self.assertRaisesRegex(ValueError,'loopback bind'):
+                make_server(host='0.0.0.0',port=0,database=Path(self.tmp.name)/'unsafe.db',workers=False)
 
     def test_editor_cannot_delete_plan_or_export_json(self):
         owner,cookie=self.register('delete-owner@example.com')

@@ -385,6 +385,24 @@ class ChildPlanningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot continue after'):
             project(plan)
 
+    def test_trump_contributions_default_through_age_seventeen(self):
+        plan = self.base()
+        plan['assets'] = 100000
+        plan['horizon'] = 12
+        plan['members'][0]['birth_date'] = '2019-04-10'
+        plan['child_accounts'] = [dict(id='t1', name='Trump', type='trump', beneficiary_id='kid-1',
+                                      annual_contribution=2000)]
+        account = project(plan)['children']['child_accounts'][0]
+        self.assertEqual((account['start_year'], account['end_year']), (2026, 2036))
+        contributions = {row['year']: row['contribution'] for row in account['annual']}
+        self.assertEqual(contributions[2036], 2000)
+        self.assertEqual(contributions[2037], 0)
+        self.assertEqual(sum(contributions.values()), 2000 * 11)
+        # Later-year caps are the same real amount.
+        plan['child_accounts'][0].update(annual_contribution=5001, start_year=2030, end_year=2030)
+        with self.assertRaisesRegex(ValueError, 'aggregate annual cap'):
+            project(plan)
+
     def test_trump_pilot_cannot_precede_account_start(self):
         plan = self.base()
         plan['child_accounts'] = [dict(id='t1', name='Trump', type='trump', beneficiary_id='kid-1',
