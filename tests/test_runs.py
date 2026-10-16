@@ -173,3 +173,19 @@ class DurableRunsTests(unittest.TestCase):
         self.assertEqual({r['id'] for r in result['runs']},{'job-000','job-063','job-064'})
         _,other=self.register('outside@example.test')
         self.assertEqual(self.request('GET',route+'/latest-runs',cookie=other)[0],404)
+
+    def test_latest_summaries_do_not_materialize_all_large_results(self):
+        import tracemalloc
+        user,cookie=self.register('large-results@example.test');saved=self.baseline(cookie)
+        result=json.dumps({'summary':{'total_unfunded':0},'monthly':['x'*200000]})
+        with self.server.store.connect() as db:
+            for i in range(65):
+                db.execute("INSERT INTO jobs(id,household,plan_id,kind,payload,status,created,result) VALUES(?,?,?,?,?,?,?,?)",
+                    (f'large-{i:03}',user['household'],saved['id'],'project',json.dumps({'scenario_id':str(i)}),'completed',i,result))
+        tracemalloc.start()
+        try:
+            latest=self.server.store.latest_runs(user,saved['id'])
+            peak=tracemalloc.get_traced_memory()[1]
+        finally: tracemalloc.stop()
+        self.assertEqual(len(latest['runs']),65)
+        self.assertLess(peak,8*1024*1024,'Read large result rows one at a time')

@@ -370,8 +370,8 @@ class Store:
                     raise LookupError('Run cursor not found')
                 where+=' AND (created<? OR (created=? AND id<?))'
                 params.extend((cursor['created'],cursor['created'],cursor['id']))
-            rows=db.execute(f'SELECT * FROM jobs WHERE {where} ORDER BY created DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
-        runs=self._summarize_runs(rows[:limit],ident)
+            rows=db.execute(f'SELECT id FROM jobs WHERE {where} ORDER BY created DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
+            runs=self._summarize_runs((db.execute('SELECT * FROM jobs WHERE id=?',(row['id'],)).fetchone() for row in rows[:limit]),ident)
         return dict(runs=runs,next_cursor=rows[limit-1]['id'] if len(rows)>limit else None)
 
     def latest_runs(self, user, ident):
@@ -383,9 +383,10 @@ class Store:
                     PARTITION BY json_extract(payload,'$.scenario_id'),kind
                     ORDER BY created DESC,id DESC) AS position
                 FROM jobs WHERE plan_id=? AND household=? AND status='completed'
-                ) SELECT jobs.* FROM jobs JOIN ranked USING(id) WHERE ranked.position=1
-                ORDER BY jobs.created DESC,jobs.id DESC""",(ident,user['household'])).fetchall()
-        return dict(runs=self._summarize_runs(rows,ident))
+                ) SELECT id FROM ranked WHERE position=1""",(ident,user['household'])).fetchall()
+            runs=self._summarize_runs((db.execute('SELECT * FROM jobs WHERE id=?',(row['id'],)).fetchone() for row in rows),ident)
+        runs.sort(key=lambda row:(row['created'],row['id']),reverse=True)
+        return dict(runs=runs)
 
     def _summarize_runs(self, rows, ident):
         runs=[]
