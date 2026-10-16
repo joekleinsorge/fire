@@ -179,3 +179,11 @@ a return-preparation engine. AMT, other itemization, QBI, loss carryovers, inher
 IRA rules, exact lots, ACA eligibility, IRMAA, and survivor filing transitions
 remain outside this module. `/api/analyze` supports `federal_tax` and
 full-year `healthcare` reference arithmetic for2026.
+# Compact calculation checks
+
+`GET /api/jobs/{id}?summary=true` returns the same authenticated calculation identity,
+status and immutable input snapshot, with only the result summary. Full monthly and
+annual ledgers remain available at `GET /api/jobs/{id}`. Completed list summaries
+are cached separately; earlier results are warmed incrementally without changing
+their inputs or results. Python clients can use `wait(id, summary_only=True)` when
+they only need completed outcomes.

@@ -339,9 +339,10 @@ class Store:
             db.execute('INSERT INTO jobs(id,household,plan_id,kind,payload,status,created) VALUES(?,?,?,?,?,?,?)',(job_id,user['household'],ident,kind,payload,'queued',time.time()))
         return self.job(user,job_id)
 
-    def job(self, user, ident, cancel=False):
+    def job(self, user, ident, cancel=False, summary_only=False):
         with self.connect() as db:
-            row = db.execute('SELECT * FROM jobs WHERE id=? AND household=?',(ident,user['household'])).fetchone()
+            columns='id,plan_id,kind,status,attempts,created,error,payload' if summary_only else '*'
+            row = db.execute(f'SELECT {columns} FROM jobs WHERE id=? AND household=?',(ident,user['household'])).fetchone()
             if not row:
                 raise LookupError('Job not found')
             if cancel:
@@ -355,7 +356,11 @@ class Store:
         result['scenario_id'] = snapshot.get('scenario_id')
         result['scenario_name'] = snapshot.get('scenario_name')
         result['name'] = snapshot.get('scenario_name') or snapshot.get('plan_name') or 'Plan calculation'
-        result['result'] = json.loads(row['result']) if row['result'] else None
+        if summary_only:
+            with self.connect() as db:
+                result['result']=self.cached_run_summary(db,ident,row['plan_id'])['result'] if row['status']=='completed' else None
+        else:
+            result['result'] = json.loads(row['result']) if row['result'] else None
         return result
 
     def runs(self, user, ident, limit=50, before=None):

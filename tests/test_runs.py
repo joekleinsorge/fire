@@ -192,5 +192,11 @@ class DurableRunsTests(unittest.TestCase):
         with patch.object(self.server.store,'_summarize_runs',side_effect=AssertionError('Large result read again')):
             again=self.server.store.latest_runs(user,saved['id'])
             history=self.server.store.runs(user,saved['id'])
+            small=self.server.store.job(user,'large-000',summary_only=True)
         self.assertEqual(again,latest)
         self.assertEqual(len(history['runs']),50)
+        self.assertEqual(small['result'],{'summary':{'total_unfunded':0}})
+        self.assertNotIn('monthly',small['result'])
+        status,response,_=self.request('GET','/api/jobs/large-000?summary=true',cookie=cookie)
+        self.assertEqual(status,200)
+        self.assertEqual(response['job']['result'],small['result'])

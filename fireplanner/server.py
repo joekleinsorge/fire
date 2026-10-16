@@ -266,7 +266,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                     return self.send(202,{'job':store.enqueue(user,ident,data,scenario_id=parts[4])})
             if len(parts) in (3,4) and parts[:2]==['api','jobs']:
                 if self.command=='GET' and len(parts)==3:
-                    return self.send(200,{'job':store.job(user,parts[2])})
+                    summary_only=parse_qs(urlsplit(self.path).query).get('summary',['false'])[0]=='true'
+                    return self.send(200,{'job':store.job(user,parts[2],summary_only=summary_only)})
                 if self.command=='POST' and len(parts)==4 and parts[3]=='cancel':
                     return self.send(200,{'job':store.job(user,parts[2],True)})
             raise LookupError('Not found')

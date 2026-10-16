@@ -45,10 +45,10 @@ class Client:
                 error.close()
             raise ValueError(f'HTTP {error.code}: {message}') from None
 
-    def wait(self, job_id, timeout=60):
+    def wait(self, job_id, timeout=60, summary_only=False):
         deadline=time.monotonic()+timeout
         while True:
-            job=self.request('GET','/api/jobs/'+job_id)['job']
+            job=self.request('GET','/api/jobs/'+job_id+('?summary=true' if summary_only else ''))['job']
             if job['status'] in ('completed','failed','cancelled'):
                 return job
             if time.monotonic() >= deadline:
