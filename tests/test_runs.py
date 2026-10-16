@@ -189,3 +189,8 @@ class DurableRunsTests(unittest.TestCase):
         finally: tracemalloc.stop()
         self.assertEqual(len(latest['runs']),65)
         self.assertLess(peak,8*1024*1024,'Read large result rows one at a time')
+        with patch.object(self.server.store,'_summarize_runs',side_effect=AssertionError('Large result read again')):
+            again=self.server.store.latest_runs(user,saved['id'])
+            history=self.server.store.runs(user,saved['id'])
+        self.assertEqual(again,latest)
+        self.assertEqual(len(history['runs']),50)

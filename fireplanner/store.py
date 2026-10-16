@@ -53,6 +53,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS revisions(plan_id TEXT NOT NULL,version INTEGER NOT NULL,plan TEXT NOT NULL,created REAL NOT NULL,PRIMARY KEY(plan_id,version));
             CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,household TEXT NOT NULL,plan_id TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,error TEXT,attempts INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS job_summaries(run_id TEXT PRIMARY KEY,data TEXT NOT NULL);
             ''')
             # A process restart returns interrupted work to the durable queue.
             db.execute("UPDATE jobs SET status='failed',error='Interrupted after maximum attempts' WHERE status='running' AND attempts>=3")
@@ -371,7 +372,7 @@ class Store:
                 where+=' AND (created<? OR (created=? AND id<?))'
                 params.extend((cursor['created'],cursor['created'],cursor['id']))
             rows=db.execute(f'SELECT id FROM jobs WHERE {where} ORDER BY created DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
-            runs=self._summarize_runs((db.execute('SELECT * FROM jobs WHERE id=?',(row['id'],)).fetchone() for row in rows[:limit]),ident)
+            runs=[self.cached_run_summary(db,row['id'],ident) for row in rows[:limit]]
         return dict(runs=runs,next_cursor=rows[limit-1]['id'] if len(rows)>limit else None)
 
     def latest_runs(self, user, ident):
@@ -384,9 +385,22 @@ class Store:
                     ORDER BY created DESC,id DESC) AS position
                 FROM jobs WHERE plan_id=? AND household=? AND status='completed'
                 ) SELECT id FROM ranked WHERE position=1""",(ident,user['household'])).fetchall()
-            runs=self._summarize_runs((db.execute('SELECT * FROM jobs WHERE id=?',(row['id'],)).fetchone() for row in rows),ident)
+            runs=[self.cached_run_summary(db,row['id'],ident) for row in rows]
         runs.sort(key=lambda row:(row['created'],row['id']),reverse=True)
         return dict(runs=runs)
+
+    def cached_run_summary(self, db, run_id, plan_id):
+        """Completed runs are immutable; keep their small list representation."""
+        cached=db.execute('SELECT data FROM job_summaries WHERE run_id=?',(run_id,)).fetchone()
+        if cached:
+            return json.loads(cached['data'])
+        row=db.execute('SELECT * FROM jobs WHERE id=? AND plan_id=?',(run_id,plan_id)).fetchone()
+        if not row:
+            raise LookupError('Run not found')
+        summary=self._summarize_runs([row],plan_id)[0]
+        if row['status']=='completed':
+            db.execute('INSERT OR IGNORE INTO job_summaries VALUES(?,?)',(run_id,json.dumps(summary,allow_nan=False)))
+        return summary
 
     def _summarize_runs(self, rows, ident):
         runs=[]

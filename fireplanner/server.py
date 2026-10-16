@@ -30,6 +30,11 @@ class Worker:
                 if row:
                     db.execute("UPDATE jobs SET status='running',attempts=attempts+1 WHERE id=?",(row['id'],))
             if not row:
+                # Warm legacy history incrementally without delaying queued work.
+                with self.store.connect() as db:
+                    old=db.execute("SELECT j.id,j.plan_id FROM jobs j LEFT JOIN job_summaries s ON s.run_id=j.id WHERE j.status='completed' AND s.run_id IS NULL LIMIT 1").fetchone()
+                    if old:
+                        self.store.cached_run_summary(db,old['id'],old['plan_id'])
                 continue
             try:
                 from . import engine
@@ -40,6 +45,7 @@ class Worker:
                 encoded = json.dumps(result,allow_nan=False)
                 with self.store.connect() as db:
                     db.execute("UPDATE jobs SET status='completed',result=?,error=NULL WHERE id=? AND status='running'",(encoded,row['id']))
+                    self.store.cached_run_summary(db,row['id'],row['plan_id'])
             except Exception as exc:
                 # Validation failures are terminal; unexpected errors retry twice.
                 status = 'failed' if isinstance(exc,(ValueError,TypeError,KeyError)) or row['attempts'] >= 2 else 'queued'
