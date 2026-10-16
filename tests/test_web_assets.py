@@ -2,11 +2,12 @@
 from pathlib import Path
 import re
 import unittest
+from fireplanner import engine
 
 
 class WebAssetTests(unittest.TestCase):
     def test_external_scripts_have_separate_tags_and_existing_files(self):
-        root=Path(__file__).resolve().parents[1]/'web'
+        root=Path(engine.__file__).resolve().parents[1]/'web'
         page=(root/'index.html').read_text()
         scripts=re.findall(r'<script\b([^>]*)>(.*?)</script>',page,re.S)
         paths=[]

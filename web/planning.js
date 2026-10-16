@@ -1,7 +1,7 @@
 'use strict';
 // Review information is presented alongside outputs; unknown facts never
 // become zero-valued modeled purchases or synthetic child birth dates.
-let showHistoricalScenarios=false;
+let showHistoricalScenarios=false,scenarioGroup='All';
 function planningPanel(id,view){
   let panel=$(id);
   if(!panel){panel=document.createElement('article');panel.id=id;panel.className='panel planning-review';const parent=$(`view-${view}`);parent.insertBefore(panel,parent.children[1]||null)}
@@ -27,11 +27,11 @@ document.addEventListener('click',e=>{const jump=e.target.closest('[data-plannin
 
 function archivedScenarioIds(){return new Set(plan.archived_scenario_ids||[])}
 renderScenarios=function(){
-  const archived=archivedScenarioIds(),all=[...scenarios].reverse(),visible=all.filter(s=>showHistoricalScenarios||!archived.has(s.id));
+  const archived=archivedScenarioIds(),all=[...scenarios],groups=[...new Set(all.filter(s=>!archived.has(s.id)).map(s=>s.data?.metadata?.group||'Other'))],visible=all.filter(s=>(showHistoricalScenarios||!archived.has(s.id))&&(scenarioGroup==='All'||(s.data?.metadata?.group||'Other')===scenarioGroup));
   let controls=$('scenario-history-controls');
   if(!controls){controls=document.createElement('div');controls.id='scenario-history-controls';controls.className='scenario-history-controls';$('scenario-list').before(controls)}
-  controls.innerHTML=`<p>${visible.length} scenarios shown · ${all.filter(s=>archived.has(s.id)).length} earlier drafts kept in history</p><label class="check-label"><input id="show-historical-scenarios" type="checkbox" ${showHistoricalScenarios?'checked':''}> Show earlier drafts and calculations</label>`;
-  $('show-historical-scenarios').onchange=e=>{showHistoricalScenarios=e.target.checked;renderScenarios();renderRunHistory()};
+  controls.innerHTML=`<label>Scenario group <select id="scenario-group">${['All',...groups].map(g=>`<option ${g===scenarioGroup?'selected':''}>${esc(g)}</option>`).join('')}</select></label><p>${visible.length} scenarios shown · ${all.filter(s=>archived.has(s.id)).length} earlier drafts kept in history</p><label class="check-label"><input id="show-historical-scenarios" type="checkbox" ${showHistoricalScenarios?'checked':''}> Show earlier drafts and calculations</label>`;
+  $('scenario-group').onchange=e=>{scenarioGroup=e.target.value;renderScenarios()};$('show-historical-scenarios').onchange=e=>{showHistoricalScenarios=e.target.checked;renderScenarios();renderRunHistory()};
   const wrap=$('scenario-list');wrap.innerHTML='';
   if(!visible.length){wrap.innerHTML='<div class="panel empty-state">No current scenarios saved.</div>';return}
   for(const s of visible){
