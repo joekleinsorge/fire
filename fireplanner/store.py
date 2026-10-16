@@ -397,7 +397,7 @@ class Store:
         runs.sort(key=lambda row:(row['created'],row['id']),reverse=True)
         return dict(runs=runs)
 
-    def cached_run_summary(self, db, run_id, plan_id):
+    def cached_run_summary(self, db, run_id, plan_id, save=False):
         """Completed runs are immutable; keep their small list representation."""
         cached=db.execute('SELECT data FROM job_summaries WHERE run_id=?',(run_id,)).fetchone()
         if cached:
@@ -406,7 +406,7 @@ class Store:
         if not row:
             raise LookupError('Run not found')
         summary=self._summarize_runs([row],plan_id)[0]
-        if row['status']=='completed':
+        if save and row['status']=='completed':
             db.execute('INSERT OR IGNORE INTO job_summaries VALUES(?,?)',(run_id,json.dumps(summary,allow_nan=False)))
         return summary
 

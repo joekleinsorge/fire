@@ -64,6 +64,19 @@ class DurableRunsTests(unittest.TestCase):
             self.assertEqual(job['snapshot']['metadata']['origin'],'ChatGPT')
             self.assertEqual(job['plan_version'],1)
             self.assertEqual(job['result']['metadata']['engine_version'],VERSION)
+            small=self.request('GET','/api/jobs/'+job_id+'?summary=true',cookie=cookie)[1]['job']
+            self.assertEqual(small['status'],'completed')
+            self.assertEqual(small['result']['summary'],job['result']['summary'])
+            attempts=[]
+            def busy_once(db):
+                if not attempts:
+                    import sqlite3
+                    attempts.append(1)
+                    raise sqlite3.OperationalError('database is locked')
+                return 7
+            self.assertEqual(worker.write(busy_once),7)
+            with patch.object(self.server,'worker',worker),patch.object(worker.thread,'is_alive',return_value=False):
+                self.assertEqual(self.request('GET','/api/health')[0],503)
         finally:
             worker.stop.set();worker.thread.join(5)
         self.request('PATCH',route,{'version':1,'changes':{'age':42,'metadata':{'notes':'Newer inputs'}}},cookie)
@@ -189,6 +202,10 @@ class DurableRunsTests(unittest.TestCase):
         finally: tracemalloc.stop()
         self.assertEqual(len(latest['runs']),65)
         self.assertLess(peak,8*1024*1024,'Read large result rows one at a time')
+        with self.server.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM job_summaries').fetchone()[0],0,'Read requests must not acquire a write lock')
+            for i in range(65):
+                self.server.store.cached_run_summary(db,f'large-{i:03}',saved['id'],save=True)
         with patch.object(self.server.store,'_summarize_runs',side_effect=AssertionError('Large result read again')):
             again=self.server.store.latest_runs(user,saved['id'])
             history=self.server.store.runs(user,saved['id'])

@@ -22,19 +22,38 @@ class Worker:
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
+    def write(self, action):
+        while not self.stop.is_set():
+            try:
+                with self.store.connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    return action(db)
+            except sqlite3.OperationalError as exc:
+                if 'locked' not in str(exc).lower() and 'busy' not in str(exc).lower():
+                    raise
+                self.stop.wait(.25)
+        return None
+
+    def claim(self, db):
+        row=db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+        if row:
+            db.execute("UPDATE jobs SET status='running',attempts=attempts+1 WHERE id=?",(row['id'],))
+        return row
+
     def run(self):
         while not self.stop.wait(.15):
-            with self.store.connect() as db:
-                db.execute('BEGIN IMMEDIATE')
-                row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
-                if row:
-                    db.execute("UPDATE jobs SET status='running',attempts=attempts+1 WHERE id=?",(row['id'],))
+            row=self.write(self.claim)
+            if self.stop.is_set():
+                return
             if not row:
                 # Warm legacy history incrementally without delaying queued work.
                 with self.store.connect() as db:
                     old=db.execute("SELECT j.id,j.plan_id FROM jobs j LEFT JOIN job_summaries s ON s.run_id=j.id WHERE j.status='completed' AND s.run_id IS NULL LIMIT 1").fetchone()
                     if old:
-                        self.store.cached_run_summary(db,old['id'],old['plan_id'])
+                        summary=self.store.cached_run_summary(db,old['id'],old['plan_id'])
+                if old:
+                    encoded_summary=json.dumps(summary,allow_nan=False)
+                    self.write(lambda db: db.execute('INSERT OR IGNORE INTO job_summaries VALUES(?,?)',(old['id'],encoded_summary)))
                 continue
             try:
                 from . import engine
@@ -43,14 +62,18 @@ class Worker:
                 if row['kind']=='project' and payload.get('baseline_plan') is not None:
                     result['baseline_projection'] = engine.project(payload['baseline_plan'])
                 encoded = json.dumps(result,allow_nan=False)
-                with self.store.connect() as db:
-                    db.execute("UPDATE jobs SET status='completed',result=?,error=NULL WHERE id=? AND status='running'",(encoded,row['id']))
-                    self.store.cached_run_summary(db,row['id'],row['plan_id'])
+                summary_row=dict(row);summary_row.update(status='completed',result=encoded,error=None)
+                encoded_summary=json.dumps(self.store._summarize_runs([summary_row],row['plan_id'])[0],allow_nan=False)
+                def complete(db):
+                    changed=db.execute("UPDATE jobs SET status='completed',result=?,error=NULL WHERE id=? AND status='running'",(encoded,row['id'])).rowcount
+                    if changed:
+                        db.execute('INSERT OR REPLACE INTO job_summaries VALUES(?,?)',(row['id'],encoded_summary))
+                self.write(complete)
             except Exception as exc:
                 # Validation failures are terminal; unexpected errors retry twice.
                 status = 'failed' if isinstance(exc,(ValueError,TypeError,KeyError)) or row['attempts'] >= 2 else 'queued'
-                with self.store.connect() as db:
-                    db.execute("UPDATE jobs SET status=?,error=? WHERE id=? AND status='running'",(status,str(exc)[:500],row['id']))
+                message=str(exc)[:500]
+                self.write(lambda db: db.execute("UPDATE jobs SET status=?,error=? WHERE id=? AND status='running'",(status,message,row['id'])))
 
 
 def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', static=None, workers=True):
@@ -109,6 +132,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                 if not isinstance(data,dict):
                     raise ValueError('Request must be an object')
             if path == '/api/health' and self.command=='GET':
+                if self.server.worker and not self.server.worker.thread.is_alive():
+                    return self.send(503,{'status':'calculation worker unavailable'})
                 return self.send(200,{'status':'ok'})
             if path == '/api/quick' and self.command=='POST':
                 from .engine import quick
