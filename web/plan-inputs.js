@@ -4,7 +4,7 @@ function isPersonalAsset(account){
   return account.type==='property'||(account.type==='other'&&!['health_savings','employer_equity','education_restricted'].includes(account.source_details?.type));
 }
 function recordOptionLabel(value,kind){return ({cash:'Cash',investment:'Investment',retirement:'Retirement',property:'Property',other:kind==='asset'?'Other personal asset':'Other financial holding',income:'Income',expense:'Expense'})[value]||value}
-function isAvailableAccount(account){return !isPersonalAsset(account)&&(account.available??true)}
+function isAvailableAccount(account){return !isPersonalAsset(account)&&((account.available??true)||(account.available_from_age!=null&&Number(plan.age)>=Number(account.available_from_age)))}
 function availableValue(row){return Number(row.available_balance??row.balance??0)}
 function portfolioValue(row){return Array.isArray(row.accounts)?row.accounts.reduce((n,balance,i)=>n+(plan.accounts[i]&&isPersonalAsset(plan.accounts[i])?0:Number(balance||0)),0):Number(row.balance??row.closing??0)}
 function flowMonth(offset){const [year,month]=String(plan.valuation_date||valuationDate()).split('-').map(Number),d=new Date(year,month-1+Number(offset),1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}

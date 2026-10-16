@@ -1606,6 +1606,37 @@
           "source_details": {
             "type": "object",
             "additionalProperties": true
+          },
+          "available_from_age": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 150,
+            "description": "Explicit modeled access age; does not establish legal eligibility."
+          },
+          "withdrawal_tax_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.95,
+            "description": "Effective tax on gross account withdrawals; assumption, not statutory return."
+          },
+          "payroll_contribution_monthly": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Deposit already withheld from take-home income. Do not count again as expense."
+          },
+          "contribution_start_month": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "contribution_end_month": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Exclusive end."
+          },
+          "household_contribution_monthly": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Funded monthly transfer from household cash into this account; counts once in net worth."
           }
         },
         "required": [
@@ -1716,6 +1747,10 @@
           "metadata": {
             "type": "object",
             "additionalProperties": true
+          },
+          "nominal": {
+            "type": "boolean",
+            "description": "Apply plan inflation to fixed nominal loan payments and balances."
           }
         },
         "required": [
@@ -1892,6 +1927,35 @@
           "metadata": {
             "type": "object",
             "additionalProperties": true
+          },
+          "transaction_costs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minimum_cash_reserve": {
+            "type": "number",
+            "minimum": 0
+          },
+          "replaces_expense_monthly": {
+            "type": "number",
+            "minimum": 0
+          },
+          "replaces_expense_end_month": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "require_full_funding": {
+            "type": "boolean",
+            "description": "Block closing if funding plus entered reserve is insufficient."
+          },
+          "nominal_loan": {
+            "type": "boolean",
+            "description": "Apply plan inflation to fixed nominal loan payments/balances."
+          },
+          "replaces_retirement_expense_monthly": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Current recurring essential housing expenses removed after retirement following a successful move."
           }
         },
         "additionalProperties": true
@@ -1986,6 +2050,35 @@
             "items": {
               "type": "string"
             }
+          },
+          "inflation_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.5
+          },
+          "cash_reserve_target": {
+            "type": "number",
+            "minimum": 0
+          },
+          "reserve_account_id": {
+            "type": "string"
+          },
+          "surplus_account_id": {
+            "type": "string"
+          },
+          "archived_scenario_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "planning_review": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "compensation_summary": {
+            "type": "object",
+            "additionalProperties": true
           }
         },
         "additionalProperties": true

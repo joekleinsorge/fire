@@ -8,7 +8,7 @@ from datetime import date
 import re
 from . import children as child_planning
 
-VERSION = '2.1.1'
+VERSION = '2.2.0'
 
 
 def is_personal_asset(account):
@@ -192,13 +192,23 @@ def _purchases(plan):
             adds_asset=adds_asset,
             asset_return=number(row.get('asset_return', 0), 'asset_return', -.99, 10),
             sell_account_id=row.get('sell_account_id'), payoff_debt_id=row.get('payoff_debt_id'),
-            sell_cost_rate=number(row.get('sell_cost_rate', .06), 'sell_cost_rate', 0, .5)))
+            sell_cost_rate=number(row.get('sell_cost_rate', .06), 'sell_cost_rate', 0, .5),
+            transaction_costs=number(row.get('transaction_costs', 0), 'transaction_costs', 0, 1e15),
+            minimum_cash_reserve=number(row.get('minimum_cash_reserve', 0), 'minimum_cash_reserve', 0, 1e15),
+            require_full_funding=row.get('require_full_funding', False),
+            nominal_loan=row.get('nominal_loan', False),
+            replaces_expense_monthly=number(row.get('replaces_expense_monthly', 0), 'replaces_expense_monthly', 0, 1e15),
+            replaces_retirement_expense_monthly=number(row.get('replaces_retirement_expense_monthly', 0), 'replaces_retirement_expense_monthly', 0, 1e15),
+            replaces_expense_end_month=number(row.get('replaces_expense_end_month', 1801), 'replaces_expense_end_month', 1, 1801, True)))
+        for key in ('require_full_funding', 'nominal_loan'):
+            if not isinstance(normalized[-1][key], bool):
+                raise ValueError(f'{key} must be a boolean')
     return normalized
 
 
 def _upkeep_active(item, month):
     # Upkeep starts the month after purchase and runs for upkeep_years, or indefinitely.
-    if not item['enabled'] or month <= item['month']:
+    if not item['enabled'] or item.get('failed') or month <= item['month']:
         return False
     return item['upkeep_years'] is None or month <= item['month'] + item['upkeep_years'] * 12
 
@@ -225,6 +235,19 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     account_rates = [number(a.get('return_rate', p['return_rate']), 'account return', -.999999999, 10) for a in accounts]
     fees = [number(a.get('fee_rate', 0), 'fee_rate', 0, .99) for a in accounts]
     accessible = [flag(a, 'available', not is_personal_asset(a)) and not is_personal_asset(a) for a in accounts]
+    access_ages = [number(a['available_from_age'], 'available_from_age', 0, 150) if a.get('available_from_age') is not None else None for a in accounts]
+    withdrawal_rates = [number(a.get('withdrawal_tax_rate', 0), 'withdrawal_tax_rate', 0, .95) for a in accounts]
+    payroll_deposits = [number(a.get('payroll_contribution_monthly', 0), 'payroll_contribution_monthly', 0, 1e15) for a in accounts]
+    household_deposits = [number(a.get('household_contribution_monthly', 0), 'household_contribution_monthly', 0, 1e15) for a in accounts]
+    contribution_starts = [number(a.get('contribution_start_month', 1), 'contribution_start_month', 1, 1801, True) for a in accounts]
+    contribution_ends = [number(a.get('contribution_end_month', 1), 'contribution_end_month', 1, 1801, True) for a in accounts]
+    inflation = number(plan.get('inflation_rate', 0), 'inflation_rate', 0, .5)
+    inflation_monthly = (1 + inflation) ** (1 / 12)
+    for i, a in enumerate(accounts):
+        if is_personal_asset(a) and (access_ages[i] is not None or payroll_deposits[i] or household_deposits[i]):
+            raise ValueError('personal assets cannot have spending access or payroll contributions')
+        if contribution_ends[i] < contribution_starts[i]:
+            raise ValueError('contribution end must follow start')
     for a in accounts:
         if a.get('type', 'investment') not in ('cash', 'investment', 'retirement', 'property', 'other'):
             raise ValueError('unsupported account type')
@@ -252,8 +275,21 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             payment = number(debt['payment'], 'debt payment', 0, 1e15)
         debt_rows.append(dict(balance=balance, rate=rate, payment=payment,
             extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance,
-            balance_only=balance_only))
+            balance_only=balance_only, nominal=flag(debt, 'nominal', False)))
     initial_debt = sum(d['balance'] for d in debt_rows)
+    def allocation_index(key):
+        ident = plan.get(key)
+        if ident is None:
+            return None
+        matches = [i for i, a in enumerate(accounts) if a.get('id') == ident]
+        if len(matches) != 1 or not accessible[matches[0]] or accounts[matches[0]].get('type') not in ('cash', 'investment'):
+            raise ValueError(f'{key} must reference one currently available cash or investment account')
+        return matches[0]
+    surplus_index = allocation_index('surplus_account_id')
+    reserve_index = allocation_index('reserve_account_id')
+    reserve_target = number(plan.get('cash_reserve_target', 0), 'cash_reserve_target', 0, 1e15)
+    if reserve_target and reserve_index is None:
+        raise ValueError('cash_reserve_target requires reserve_account_id')
     # Financed purchases originate a debt in the purchase month; payments start the month after.
     for item in purchases:
         if item['enabled'] and item['loan_amount']:
@@ -261,7 +297,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             loan, months = item['loan_amount'], item['loan_months']
             payment = loan * rate / (1 - (1 + rate) ** -months) if rate else loan / months
             debt_rows.append(dict(balance=0.0, rate=rate, payment=payment, extra=0.0, months=months,
-                                  origin=item['month'], principal=loan))
+                                  origin=item['month'], principal=loan, purchase_id=item['id'], nominal=item['nominal_loan']))
     def resolve(rows, key, label):
         for item in purchases:
             ident = item[key]
@@ -277,8 +313,9 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     purchase_assets = [dict(id=item['id'], month=item['month'], value=0.0, rate=item['asset_return'], amount=item['amount'])
                        for item in purchases if item['enabled'] and item['adds_asset']]
     # Income is available immediately; withdrawals follow the user's account order.
-    available_indices = [i for i, available in enumerate(accessible) if available]
-    monthly, annual = [], []
+    available_indices = [i for i, available in enumerate(accessible) if available or
+                         (not is_personal_asset(accounts[i]) and access_ages[i] is not None and p['age'] >= access_ages[i])]
+    monthly, annual, purchase_events = [], [], []
     first_shortfall = None
     total_unfunded = 0.0
     retirement_age = number(plan.get('retirement_age', p['age']), 'retirement_age', 0, 300, True)
@@ -295,6 +332,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     # Open-ended upkeep is permanent retirement spending; time-limited upkeep is temporary, like child funding.
     annual_desired_spending += sum(row['annual_upkeep'] for row in purchases
                                    if row['enabled'] and row['upkeep_years'] is None and row['month'] <= p['horizon'] * 12)
+    annual_desired_spending = max(0.0, annual_desired_spending - sum(row['replaces_retirement_expense_monthly'] * 12 for row in purchases
+                                   if row['enabled'] and row['month'] <= p['horizon'] * 12))
     annual_net_spending = max(0.0, annual_desired_spending - annual_retirement_income)
     target = annual_net_spending / p['withdrawal_rate']
     if not all(math.isfinite(value) for value in (annual_desired_spending, annual_retirement_income, target)):
@@ -305,9 +344,15 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_essential = True
     retirement_desired = True
     accumulation_shortfall = 0.0
-    fields = ('income', 'expenses', 'essential_expenses', 'funded_expenses', 'unfunded',
+    fields = ('income', 'expenses', 'essential_expenses', 'funded_expenses', 'unfunded', 'payroll_contributions', 'household_account_contributions', 'account_contribution_due', 'account_contribution_unfunded', 'withdrawal_taxes', 'debt_inflation_adjustment', 'purchase_funding_gap', 'purchase_blocked',
               'essential_unfunded', 'desired_expenses', 'desired_unfunded', 'debt_payment', 'debt_due', 'debt_unfunded', 'debt_interest', 'debt_principal', 'gain', 'fees', 'purchase_due', 'purchase_paid', 'purchase_unfunded', 'purchase_upkeep', 'purchase_asset_added', 'purchase_loan_drawn', 'purchase_sale_proceeds', 'purchase_sale_costs', 'purchase_debt_payoff', 'child_contributions', 'child_contribution_due', 'child_education', 'child_education_due', 'child_unfunded')
     for month in range(1, p['horizon'] * 12 + 1):
+        # Age is measured at the beginning of each month. An access assumption
+        # never unlocks a property, HSA, or education holding implicitly.
+        available_indices = [i for i, a in enumerate(accounts) if not is_personal_asset(a) and
+                             (accessible[i] or (access_ages[i] is not None and p['age'] + (month - 1) / 12 >= access_ages[i]))]
+        if len(balances) > len(accounts):
+            available_indices.append(len(accounts))
         opening = sum(balances) + sum(a['value'] for a in purchase_assets)
         gain = fee = 0.0
         for asset in purchase_assets:
@@ -324,24 +369,37 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             balances[i] -= charged
             gain += earned
             fee += charged
+        payroll_contributions = 0.0
+        for i in range(len(accounts)):
+            if contribution_starts[i] <= month < contribution_ends[i]:
+                balances[i] += payroll_deposits[i]
+                payroll_contributions += payroll_deposits[i]
         due = [row for row in normalized if row['enabled'] and row['start'] <= month < row['end'] and (month-row['start']) % row['every'] == 0]
         amounts = [(row, row['amount'] * (1 + row['growth']) ** ((month-row['start']) / 12)) for row in due]
         income = sum(value for row, value in amounts if row['kind'] == 'income')
         essential = sum(value for row, value in amounts if row['kind'] == 'expense' and row['essential'])
+        essential = max(0.0, essential - sum(item['replaces_expense_monthly'] for item in purchases
+                        if item.get('closed') and item['month'] < month < item['replaces_expense_end_month']) -
+                        sum(item['replaces_retirement_expense_monthly'] for item in purchases
+                            if item.get('closed') and item['month'] < month and month >= retirement_start))
         desired = sum(value for row, value in amounts if row['kind'] == 'expense' and not row['essential'])
         cash = income
+        withdrawal_taxes = 0.0
         def pay(amount):
-            nonlocal cash
+            nonlocal cash, withdrawal_taxes
             from_income = min(cash, amount)
             cash -= from_income
             remaining = amount - from_income
             for i in available_indices:
-                taken = min(balances[i], remaining)
+                tax_rate = withdrawal_rates[i] if i < len(withdrawal_rates) else 0.0
+                taken = min(balances[i], remaining / (1 - tax_rate))
                 balances[i] -= taken
-                remaining -= taken
+                withheld = taken * tax_rate
+                withdrawal_taxes += withheld
+                remaining = max(0.0, remaining - (taken - withheld))
             return amount - remaining, remaining
         essential_paid, essential_unfunded = pay(essential)
-        debt_payment = debt_due = debt_unfunded = debt_interest = debt_principal = 0.0
+        debt_payment = debt_due = debt_unfunded = debt_interest = debt_principal = debt_inflation_adjustment = 0.0
         debt_ledger = []
         for debt in debt_rows:
             if debt.get('balance_only'):
@@ -351,9 +409,14 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             if month <= debt['origin']:
                 continue
             debt_open = debt['balance']
-            interest = debt_open * debt['rate']
+            if debt.get('nominal'):
+                deflation = debt['balance'] * (1 - 1 / inflation_monthly)
+                debt['balance'] -= deflation
+                debt_inflation_adjustment += deflation
+            interest = debt['balance'] * debt['rate']
             debt['balance'] += interest
-            required = min(debt['balance'], debt['payment'] + debt['extra'])
+            payment_factor = (1 + inflation) ** (-(month - debt['origin']) / 12) if debt.get('nominal') else 1.0
+            required = min(debt['balance'], (debt['payment'] + debt['extra']) * payment_factor)
             matured = month - debt['origin'] >= debt['months']
             if matured:
                 required = debt['balance']
@@ -380,17 +443,45 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             debt_ledger.append(dict(opening=debt_open, interest=interest, due=required, payment=paid,
                                     principal=principal_paid, unfunded=unpaid, balance=debt['balance']))
         desired_paid, desired_unfunded = pay(desired)
+        household_account_contributions = account_contribution_due = account_contribution_unfunded = 0.0
+        for i in range(len(accounts)):
+            if contribution_starts[i] <= month < contribution_ends[i] and household_deposits[i]:
+                paid, unpaid = pay(household_deposits[i])
+                balances[i] += paid
+                household_account_contributions += paid
+                account_contribution_due += household_deposits[i]
+                account_contribution_unfunded += unpaid
         child_cash = dict(contributions=0.0, contribution_due=0.0, education=0.0, education_due=0.0, unfunded=0.0)
-        if (valuation.month + month - 1) % 12 == 0:
-            year = valuation.year + (valuation.month + month - 2) // 12
+        if (valuation.month + month) % 12 == 0:
+            year = valuation.year + (valuation.month + month - 1) // 12
             child_cash = child_planning.advance(children, year, pay,
                 year_fraction=month / 12 if not children['annual'] else 1)
         # Selling an existing asset and retiring its debt happen before the new purchase is paid.
-        sale_proceeds = sale_costs = payoff = 0.0
+        sale_proceeds = sale_costs = payoff = purchase_funding_gap = 0.0
+        purchase_blocked = 0
         for item in purchases:
             if not item['enabled'] or item['month'] != month:
                 continue
             proceeds = 0.0
+            if item['require_full_funding']:
+                sale_index, debt_index = item['sell_account_id_index'], item['payoff_debt_id_index']
+                expected_sale = balances[sale_index] * (1 - item['sell_cost_rate']) if sale_index is not None else 0.0
+                expected_payoff = debt_rows[debt_index]['balance'] if debt_index is not None else 0.0
+                required = item['amount'] - item['loan_amount'] + item['transaction_costs'] + expected_payoff + item['minimum_cash_reserve']
+                liquidity = cash + expected_sale + sum(balances[i] * (1 - (withdrawal_rates[i] if i < len(withdrawal_rates) else 0))
+                                                    for i in available_indices if i != sale_index)
+                event=dict(id=item['id'], name=item['name'], month=month,
+                           required_cash_after_sale=required-item['minimum_cash_reserve']-expected_sale,
+                           liquid_reserve_required=item['minimum_cash_reserve'],
+                           funding_gap=max(0.0, required-liquidity), executed=liquidity+1e-8>=required)
+                purchase_events.append(event)
+                if liquidity + 1e-8 < required:
+                    item['failed'] = True
+                    item['blocked_debt_payoff'] = expected_payoff if sale_index is None else 0.0
+                    purchase_blocked += 1
+                    purchase_funding_gap += required - liquidity
+                    continue
+            item['closed'] = True
             if item['sell_account_id_index'] is not None:
                 value = balances[item['sell_account_id_index']]
                 balances[item['sell_account_id_index']] = 0.0
@@ -400,23 +491,28 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 cash += proceeds
             if item['payoff_debt_id_index'] is not None:
                 debt = debt_rows[item['payoff_debt_id_index']]
-                paid, _ = pay(min(debt['balance'], proceeds))
+                paid, _ = pay(debt['balance'] if item['require_full_funding'] else min(debt['balance'], proceeds))
                 debt['balance'] -= paid
                 payoff += paid
         debt_payment += payoff
         debt_principal += payoff
-        purchase_due = sum(item['amount'] - item['loan_amount'] for item in purchases if item['enabled'] and item['month'] == month)
+        purchase_due = sum(item['amount'] - item['loan_amount'] + item['transaction_costs'] + item.get('blocked_debt_payoff', 0) for item in purchases if item['enabled'] and item['month'] == month)
+        blocked_due = sum(item['amount'] - item['loan_amount'] + item['transaction_costs'] + item.get('blocked_debt_payoff', 0) for item in purchases if item.get('failed') and item['month'] == month)
         upkeep = sum(item['annual_upkeep'] / 12 for item in purchases if _upkeep_active(item, month))
-        purchase_paid, purchase_unfunded = pay(purchase_due + upkeep)
+        purchase_paid, purchase_unfunded = pay(purchase_due - blocked_due + upkeep)
+        purchase_unfunded += blocked_due
         # Allocate funded purchase cash in input order, before upkeep. Missing
         # cash is an explicit shortfall, never a free addition to net worth.
         funded_cash = min(purchase_paid, purchase_due)
         funded_values = {}
         for item in purchases:
             if item['enabled'] and item['month'] == month:
-                paid = min(funded_cash, item['amount'] - item['loan_amount'])
+                if item.get('failed'):
+                    funded_values[item['id']] = 0.0
+                    continue
+                paid = min(funded_cash, item['amount'] - item['loan_amount'] + item['transaction_costs'])
                 funded_cash -= paid
-                funded_values[item['id']] = paid + item['loan_amount']
+                funded_values[item['id']] = min(paid, item['amount'] - item['loan_amount']) + item['loan_amount']
         purchase_asset_added = 0.0
         for asset in purchase_assets:
             if asset['month'] == month:
@@ -424,11 +520,18 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 purchase_asset_added += asset['value']
         for debt in debt_rows:
             if debt['origin'] and debt['origin'] == month:
-                debt['balance'] = debt['principal']
-        purchase_loan_drawn = sum(item['loan_amount'] for item in purchases if item['enabled'] and item['month'] == month)
+                item = next(item for item in purchases if item['id'] == debt['purchase_id'])
+                debt['balance'] = 0.0 if item.get('failed') else debt['principal']
+        purchase_loan_drawn = sum(item['loan_amount'] for item in purchases if item['enabled'] and not item.get('failed') and item['month'] == month)
         asset_value = sum(a['value'] for a in purchase_assets)
         # If every account is unavailable, keep surplus in an explicit liquid cash ledger.
-        if available_indices:
+        if reserve_index is not None:
+            reserve_deposit = min(cash, max(0.0, reserve_target - balances[reserve_index]))
+            balances[reserve_index] += reserve_deposit
+            cash -= reserve_deposit
+        if surplus_index is not None:
+            balances[surplus_index] += cash
+        elif available_indices:
             balances[available_indices[0]] += cash
         else:
             if len(balances) == len(accounts):
@@ -448,6 +551,9 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         row = dict(month=month, opening=opening, closing=closing, balance=closing,
             available_balance=sum(balances[i] for i in available_indices), net_worth=closing-debt_balance,
             gain=gain, fees=fee, income=income, expenses=essential+desired+purchase_due+upkeep+child_cash['contribution_due']+child_cash['education_due'], essential_expenses=essential,
+            payroll_contributions=payroll_contributions, withdrawal_taxes=withdrawal_taxes, debt_inflation_adjustment=debt_inflation_adjustment,
+            household_account_contributions=household_account_contributions, account_contribution_due=account_contribution_due, account_contribution_unfunded=account_contribution_unfunded,
+            purchase_funding_gap=purchase_funding_gap, purchase_blocked=purchase_blocked,
             purchase_due=purchase_due, purchase_paid=purchase_paid, purchase_unfunded=purchase_unfunded, purchase_upkeep=upkeep,
             purchase_asset_added=purchase_asset_added, purchase_loan_drawn=purchase_loan_drawn, purchase_asset_value=asset_value,
             purchase_sale_proceeds=sale_proceeds, purchase_sale_costs=sale_costs, purchase_debt_payoff=payoff,
@@ -462,7 +568,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         else:
             retirement_survives = retirement_survives and row['available_balance'] > 1e-8
             retirement_essential = retirement_essential and essential_unfunded + debt_unfunded <= 1e-8
-            retirement_desired = retirement_desired and desired_unfunded + purchase_unfunded + child_cash['unfunded'] <= 1e-8
+            retirement_desired = retirement_desired and desired_unfunded + purchase_unfunded + child_cash['unfunded'] + account_contribution_unfunded <= 1e-8
         if month == retirement_month:
             retirement_balance = closing
             retirement_available_balance = row['available_balance']
@@ -496,6 +602,13 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         annual_net_spending_label='Annualized retirement expenses less income')
     summary = dict(initial_assets=initial, initial_debt=initial_debt, ending_assets=closing,
         ending_net_worth=closing-debt_balance, total_unfunded=total_unfunded,
+        payroll_contributions=sum(r['payroll_contributions'] for r in annual),
+        household_account_contributions=sum(r['household_account_contributions'] for r in annual),
+        account_contribution_unfunded=sum(r['account_contribution_unfunded'] for r in annual),
+        withdrawal_taxes=sum(r['withdrawal_taxes'] for r in annual),
+        purchase_funding_gap=sum(r['purchase_funding_gap'] for r in annual),
+        blocked_purchases=sum(r['purchase_blocked'] for r in annual),
+        purchase_events=purchase_events,
         first_shortfall_age=p['age']+(first_shortfall / 12) if first_shortfall else None,
         retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance, **target_fields)
     return dict(**target_fields, children=children, future_purchases=purchases, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
@@ -503,7 +616,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         portfolio_survives=retirement_survives if has_window else None,
         essential_spending_funded=retirement_essential if has_window else None,
         desired_lifestyle_funded=retirement_desired if has_window else None,
-        metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Unavailable accounts cannot fund spending.',
+        metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Spending access changes only at explicitly entered ages; withdrawal taxes are user-entered effective rates, not statutory tax calculations.',
+            'Payroll contributions are deposits already excluded from take-home income. Do not deduct them again as expenses.',
+            'Purchases marked require_full_funding do not sell assets, originate loans or incur upkeep when funding including the entered reserve is insufficient.',
+            'Nominal loans use entered inflation to express future payments and balances in plan-start purchasing power.',
             'Underfunded purchases add only funded cost to asset value; a partial value does not mean a purchase can close.',
             'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
             'Property and other asset values use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt.'])

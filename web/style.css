@@ -17,3 +17,5 @@ textarea{font-family:inherit;resize:vertical}.wide-label textarea,.form-grid tex
 @media(max-width:600px){.input-review-row{display:block}.input-review-row .link-button{margin-top:7px}.plan-overview-links{align-items:flex-start;flex-direction:column;gap:8px}}
 
 #run-detail{margin-top:18px}#run-detail>p{font-size:12px;color:var(--muted)}#run-detail details{margin-top:18px;font-size:12px}#run-detail summary{cursor:pointer;font-weight:600;color:var(--forest)}.run-assumptions .button-row,.scenario-card .button-row{flex-wrap:wrap}#runs-table small{max-width:320px;overflow:hidden;text-overflow:ellipsis}#older-runs{margin-top:14px}
+
+.planning-review{margin-bottom:24px}.planning-review ul{padding-left:22px;line-height:1.7}.scenario-history-controls{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:20px 0}.scenario-card h2{margin:12px 0}.scenario-card .scenario-result p{margin:12px 0}.planning-review .summary-strip{margin:20px 0}@media(max-width:700px){.scenario-history-controls{display:block}}

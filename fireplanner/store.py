@@ -317,6 +317,8 @@ class Store:
         if 'version' in data and (type(data['version']) is not int or data['version'] != plan['version']):
             raise FileExistsError('Plan changed; reload before running')
         scenario = self.scenario(user,ident,scenario_id)['data'] if scenario_id else None
+        if scenario and scenario.get('metadata',{}).get('status') == 'needs_inputs':
+            raise ValueError('This scenario needs confirmed purchase or household inputs before it can be calculated')
         kind = data.get('kind','project')
         if kind not in ('project','simulate'):
             raise ValueError('Unknown run kind')

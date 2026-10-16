@@ -25,6 +25,16 @@ class DurableRunsTests(unittest.TestCase):
             streams=[dict(id='spending',kind='expense',amount=10,every_months=1)],debts=[],metadata={'notes':'Known inputs'})
         return self.request('POST','/api/plans',{'name':'Baseline','plan':plan},cookie)[1]
 
+    def test_incomplete_goal_cannot_produce_no_purchase_result(self):
+        _,cookie=self.register('incomplete@example.test');saved=self.baseline(cookie);route='/api/plans/'+saved['id']
+        _,reply,_=self.request('POST',route+'/scenarios',{'name':'Second home — budget missing',
+            'base_version':1,'changes':{},'metadata':{'status':'needs_inputs','missing_inputs':['Price and timing']}},cookie)
+        scenario=reply['scenario']
+        status,reply,_=self.request('POST',route+'/scenarios/'+scenario['id']+'/run',{'kind':'project'},cookie)
+        self.assertEqual(status,400)
+        self.assertIn('needs confirmed',reply['error'])
+        self.assertEqual(self.request('GET',route+'/runs',cookie=cookie)[1]['runs'],[])
+
     def wait_job(self,ident,cookie):
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:

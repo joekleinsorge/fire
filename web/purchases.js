@@ -48,7 +48,7 @@ async function acceptPurchasePlan(candidate,startingFingerprint){
 }
 function readPurchaseRow(forPreview=false){
   const original=structuredClone((purchaseBase.future_purchases||[]).find(p=>p.id===purchaseEditId)||{});for(const key of ['upkeep_years','loan_amount','loan_rate','loan_months','sell_account_id','sell_cost_rate','payoff_debt_id','adds_asset','asset_return'])delete original[key];
-  const row={...original,id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
+  const row={...original,id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked,require_full_funding:true};
   const years=$('purchase-upkeep-years').value.trim(),loan=Number($('purchase-loan').value||0);
   if(years)row.upkeep_years=Number(years);
   if(loan){row.loan_amount=loan;row.loan_rate=Number($('purchase-loan-rate').value)/100;row.loan_months=Number($('purchase-loan-years').value)*12}

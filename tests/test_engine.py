@@ -358,9 +358,11 @@ class ChildPlanningTests(unittest.TestCase):
         accounts = {row['id']: row for row in children['child_accounts']}
         college_2026, trump_2026 = accounts['college']['annual'][0], accounts['future']['annual'][0]
         self.assertEqual(college_2026['age'], 16)
-        self.assertAlmostEqual(college_2026['return_amount'], 10)
+        # Month 1 follows the January valuation month: February through
+        # December gives eleven months of growth before the year-end event.
+        self.assertAlmostEqual(college_2026['return_amount'], 100 * (1.1**(11/12)-1))
         self.assertAlmostEqual(college_2026['education_withdrawal'], 200)
-        self.assertAlmostEqual(college_2026['closing'], 8.9)
+        self.assertAlmostEqual(college_2026['closing'], 100 * 1.1**(11/12) * .99**(11/12) - 100)
         self.assertEqual(trump_2026['contribution'], 2500)
         self.assertEqual(accounts['future']['annual'][2]['contribution'], 0)
         # Child balances stay outside the parent's assets and target; only
@@ -387,10 +389,10 @@ class ChildPlanningTests(unittest.TestCase):
                                       annual_contribution=1000, start_year=2026, end_year=2026)]
         result = project(plan)
         first = result['children']['child_accounts'][0]['annual'][0]
-        self.assertAlmostEqual(first['contribution'], 520)
-        self.assertAlmostEqual(first['unfunded_contribution'], 480)
-        self.assertAlmostEqual(result['annual'][0]['child_unfunded'], 480)
-        self.assertEqual(result['first_shortfall_month'], 12)
+        self.assertAlmostEqual(first['contribution'], 500)
+        self.assertAlmostEqual(first['unfunded_contribution'], 500)
+        self.assertAlmostEqual(result['annual'][0]['child_unfunded'], 500)
+        self.assertEqual(result['first_shortfall_month'], 11)
 
     def test_trump_aggregate_caps_and_beneficiary_validation(self):
         plan = self.base()
