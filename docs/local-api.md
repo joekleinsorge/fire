@@ -106,3 +106,11 @@ Scenario IDs in `archived_scenario_ids` are hidden from the current comparison l
 `household_contribution_monthly` is a funded transfer from household cash into an existing account (for example, an unassigned 529 pool). It increases that account, decreases cash once, and does not reduce total net worth. Unmet transfers are recorded separately as `account_contribution_unfunded`, not as fictitious spending or asset value. Do not also enter the same transfer as an expense stream or a child-account contribution.
 
 `replaces_retirement_expense_monthly` removes an explicitly allocated current-home operating budget from essential retirement expenses after a successful move. Use it only where the baseline budget includes those exact expenses; do not invent a housing allocation without labeling the assumption.
+
+### Linked project upkeep
+
+A future purchase may set `upkeep_until_purchase_id` to another purchase ID.
+Its upkeep stops in the month after that referenced purchase successfully closes.
+A blocked or disabled closing leaves the original upkeep in place. This supports
+a pool installed before a move without charging its upkeep after the property
+is sold. References must identify another purchase in the snapshot.

@@ -47,7 +47,7 @@ const baseRenderRunHistory=renderRunHistory;
 renderRunHistory=function(){const all=runHistory;try{if(!showHistoricalScenarios)runHistory=all.filter(r=>!archivedScenarioIds().has(r.scenario_id));baseRenderRunHistory()}finally{runHistory=all}};
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-open-planning-run]');if(b){try{const {job}=await api(`/api/jobs/${encodeURIComponent(b.dataset.openPlanningRun)}`);renderSavedRun(job);$('run-detail').scrollIntoView({behavior:'smooth'})}catch(err){tell(err.message,true)}}});
 const baseRenderSavedRun=renderSavedRun;
-renderSavedRun=function(job){baseRenderSavedRun(job);if(job.result?.metadata?.engine_version!=='2.2.0'){$('run-detail').insertAdjacentHTML('afterbegin','<p class="method-note">Historical calculation: this result predates the current contribution, access, withdrawal-tax and closing checks. Open a current comparison for the revised model.</p>')}};
+renderSavedRun=function(job){baseRenderSavedRun(job);if(!['2.2.0','2.2.1'].includes(job.result?.metadata?.engine_version)){$('run-detail').insertAdjacentHTML('afterbegin','<p class="method-note">Historical calculation: this result predates the current contribution, access, withdrawal-tax and closing checks. Open a current comparison for the revised model.</p>')}};
 
 // Refresh saved data when returning to this tab, while preserving unsaved edits.
 let checkingPlanVersion=false;
@@ -68,3 +68,27 @@ openPurchase=function(mode,id){baseOpenPurchase(mode,id);const row=(purchaseBase
 const baseReadPurchaseRow=readPurchaseRow;
 readPurchaseRow=function(preview=false){return {...baseReadPurchaseRow(preview),transaction_costs:Number($('purchase-transaction-costs').value),minimum_cash_reserve:Number($('purchase-liquid-reserve').value),nominal_loan:$('purchase-nominal-loan').checked,replaces_expense_monthly:Number($('purchase-replaced-expenses').value),replaces_expense_end_month:Number($('purchase-replaced-end').value),replaces_retirement_expense_monthly:Number($('purchase-retirement-replaced').value)}};
 advancedCosts.oninput=()=>updatePurchasePreview();
+
+
+// Coverage is saved with the household plan; comparisons use durable results.
+function renderPlanningCoverage(){
+  const rows=plan.planning_coverage||[];
+  const panel=planningPanel('planning-coverage','overview');panel.hidden=!rows.length;
+  panel.innerHTML=`<p class="eyebrow">YOUR PLANNING CHECKLIST</p><h2>What this plan covers</h2><p>Modeled means an explicit scenario exists. It does not mean a purchase is affordable or the inputs are confirmed.</p><div class="table-scroll"><table><thead><tr><th>Goal</th><th>Coverage</th><th>Included and still needed</th></tr></thead><tbody>${rows.map(r=>`<tr><td><strong>${esc(r.goal)}</strong>${r.scenario_ids?.length?`<br><button class="link-button" data-coverage-group="${esc(r.group)}">View ${r.scenario_ids.length} comparisons ↗</button>`:''}</td><td>${esc(r.status)}</td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>`;
+  const dates=planningPanel('planning-source-dates','inputs');dates.hidden=!rows.length;
+  dates.innerHTML=`<h2>Balance sources and freshness</h2><p>The valuation date anchors the forecast; it does not refresh a bank balance. Report dates and underlying statements can differ.</p><div class="table-scroll"><table><thead><tr><th>Account</th><th>Entered balance</th><th>Latest report</th><th>Underlying statement</th></tr></thead><tbody>${(plan.accounts||[]).map(a=>{const source=a.source_details||{},latest=source.latest_reported_snapshot||{};return `<tr><td>${esc(a.name)}</td><td>${money(a.balance)}</td><td>${esc(latest.reported_on||source.as_of||'Not recorded')}</td><td>${esc(latest.underlying_statement_date||source.as_of||'Not recorded')}</td></tr>`}).join('')}</tbody></table></div>`;
+}
+const coveredRenderReview=renderPlanningReview;
+renderPlanningReview=function(){coveredRenderReview();renderPlanningCoverage()};
+const coveredRenderScenarios=renderScenarios;
+renderScenarios=function(){
+  coveredRenderScenarios();
+  const archived=archivedScenarioIds(),active=scenarios.filter(s=>!archived.has(s.id));
+  const rows=active.filter(s=>scenarioGroup==='All'||s.data?.metadata?.group===scenarioGroup);
+  const base=active.find(s=>scenarioName(s)==='Keep current home — base');
+  const baseline=runHistory.find(r=>r.scenario_id===base?.id&&r.kind==='project'&&r.status==='completed')?.result?.summary;
+  let panel=$('scenario-comparison');if(!panel){panel=document.createElement('article');panel.id='scenario-comparison';panel.className='panel';$('scenario-list').before(panel)}
+  panel.innerHTML=`<p class="eyebrow">SAVED RESULTS</p><h2>Compare outcomes</h2><p>All amounts are in plan-start purchasing power. Retirement assets below are spendable at the entered retirement age; restricted holdings are excluded. Differences compare with the current-home base case and also reflect any retirement-date changes.</p><div class="table-scroll"><table><thead><tr><th>Scenario</th><th>Retirement age</th><th>Spendable at retirement</th><th>Change vs current-home base</th><th>Purchase funding</th><th>First shortfall age</th></tr></thead><tbody>${rows.map(s=>{const run=runHistory.find(r=>r.scenario_id===s.id&&r.kind==='project'&&r.status==='completed'),sum=run?.result?.summary,needs=s.data?.metadata?.status==='needs_inputs',delta=sum&&baseline?sum.retirement_available_balance-baseline.retirement_available_balance:null;return `<tr><td>${run?`<button class="link-button" data-open-planning-run="${esc(run.id)}">${esc(scenarioName(s))}</button>`:esc(scenarioName(s))}</td><td>${esc(scenarioPlan(s).retirement_age)}</td><td>${sum?money(sum.retirement_available_balance):'—'}</td><td>${delta==null?'—':(delta>0?'+':'')+money(delta)}</td><td>${needs?'Needs inputs':!sum?'Not calculated':sum.blocked_purchases?`Blocked · ${money(sum.purchase_funding_gap)} gap`:'No blocked transactions'}</td><td>${sum?(sum.first_shortfall_age==null?'None in fixed case':Number(sum.first_shortfall_age).toFixed(1)):'—'}</td></tr>`}).join('')}</tbody></table></div><p class="small-note">A blocked purchase leaves the household in the existing home. A funded forecast in that case does not establish affordability of the requested purchase. Fixed returns omit sequence risk; review simulations and conservative/adverse cases before acting.</p>`;
+};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-coverage-group]');if(b){scenarioGroup=b.dataset.coverageGroup;go('scenarios');renderScenarios()}});
+renderPlanningCoverage();

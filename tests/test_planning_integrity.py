@@ -121,3 +121,16 @@ class PlanningIntegrityTests(unittest.TestCase):
         self.assertEqual(r['monthly'][1]['account_contribution_unfunded'],50)
         self.assertEqual(r['monthly'][1]['unfunded'],0)
         self.assertEqual(r['monthly'][1]['closing'],250)
+
+    def test_project_upkeep_ends_only_after_successful_linked_move(self):
+        for cash, expected in [(10000, 20), (100, 110)]:
+            p = self.plan(accounts=[dict(type='cash', balance=cash, return_rate=0)],
+                future_purchases=[dict(id='pool', name='Pool', amount=0, month=1,
+                    annual_upkeep=120, upkeep_until_purchase_id='move'),
+                    dict(id='move', name='Move', amount=1000, month=3,
+                    require_full_funding=True)])
+            r = project(p)
+            self.assertAlmostEqual(r['annual'][0]['purchase_upkeep'], expected)
+            self.assertEqual(r['summary']['blocked_purchases'], int(cash == 100))
+        p['future_purchases'][0]['upkeep_until_purchase_id'] = 'missing'
+        with self.assertRaises(ValueError): project(p)

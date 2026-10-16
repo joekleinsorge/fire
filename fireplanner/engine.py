@@ -8,7 +8,7 @@ from datetime import date
 import re
 from . import children as child_planning
 
-VERSION = '2.2.0'
+VERSION = '2.2.1'
 
 
 def is_personal_asset(account):
@@ -186,7 +186,7 @@ def _purchases(plan):
         normalized.append(dict(id=ident, name=name, enabled=enabled, amount=amount,
             month=number(row.get('month'), 'future purchase month', 1, 1800, True),
             annual_upkeep=number(row.get('annual_upkeep', 0), 'annual_upkeep', 0, 1e15),
-            upkeep_years=upkeep_years, loan_amount=loan,
+            upkeep_years=upkeep_years, upkeep_until_purchase_id=row.get('upkeep_until_purchase_id'), loan_amount=loan,
             loan_rate=number(row.get('loan_rate', 0), 'loan_rate', 0, 10),
             loan_months=number(row.get('loan_months', 360), 'loan_months', 1, 1800, True),
             adds_asset=adds_asset,
@@ -203,12 +203,18 @@ def _purchases(plan):
         for key in ('require_full_funding', 'nominal_loan'):
             if not isinstance(normalized[-1][key], bool):
                 raise ValueError(f'{key} must be a boolean')
+    for item in normalized:
+        stop = item.get('upkeep_until_purchase_id')
+        if stop is not None and (not isinstance(stop, str) or stop not in identifiers or stop == item['id']):
+            raise ValueError('upkeep_until_purchase_id must reference another saved purchase')
     return normalized
 
 
-def _upkeep_active(item, month):
+def _upkeep_active(item, month, purchases=()):
     # Upkeep starts the month after purchase and runs for upkeep_years, or indefinitely.
     if not item['enabled'] or item.get('failed') or month <= item['month']:
+        return False
+    if any(other['id'] == item.get('upkeep_until_purchase_id') and other.get('closed') and month > other['month'] for other in purchases):
         return False
     return item['upkeep_years'] is None or month <= item['month'] + item['upkeep_years'] * 12
 
@@ -498,7 +504,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         debt_principal += payoff
         purchase_due = sum(item['amount'] - item['loan_amount'] + item['transaction_costs'] + item.get('blocked_debt_payoff', 0) for item in purchases if item['enabled'] and item['month'] == month)
         blocked_due = sum(item['amount'] - item['loan_amount'] + item['transaction_costs'] + item.get('blocked_debt_payoff', 0) for item in purchases if item.get('failed') and item['month'] == month)
-        upkeep = sum(item['annual_upkeep'] / 12 for item in purchases if _upkeep_active(item, month))
+        upkeep = sum(item['annual_upkeep'] / 12 for item in purchases if _upkeep_active(item, month, purchases))
         purchase_paid, purchase_unfunded = pay(purchase_due - blocked_due + upkeep)
         purchase_unfunded += blocked_due
         # Allocate funded purchase cash in input order, before upkeep. Missing
