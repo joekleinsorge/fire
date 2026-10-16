@@ -187,6 +187,7 @@ def _purchases(plan):
         normalized.append(dict(id=ident, name=name, enabled=enabled, amount=amount,
             month=number(row.get('month'), 'future purchase month', 1, 1800, True),
             annual_upkeep=number(row.get('annual_upkeep', 0), 'annual_upkeep', 0, 1e15),
+            qualified_home_mortgage=row.get('qualified_home_mortgage',False),property_tax_annual=number(row.get('property_tax_annual',0),'property tax annual',0,1e15),
             upkeep_years=upkeep_years, upkeep_until_purchase_id=row.get('upkeep_until_purchase_id'), loan_amount=loan,
             loan_rate=number(row.get('loan_rate', 0), 'loan_rate', 0, 10),
             loan_months=number(row.get('loan_months', 360), 'loan_months', 1, 1800, True),
@@ -201,7 +202,7 @@ def _purchases(plan):
             replaces_expense_monthly=number(row.get('replaces_expense_monthly', 0), 'replaces_expense_monthly', 0, 1e15),
             replaces_retirement_expense_monthly=number(row.get('replaces_retirement_expense_monthly', 0), 'replaces_retirement_expense_monthly', 0, 1e15),
             replaces_expense_end_month=number(row.get('replaces_expense_end_month', 1801), 'replaces_expense_end_month', 1, 1801, True)))
-        for key in ('require_full_funding', 'nominal_loan'):
+        for key in ('require_full_funding', 'nominal_loan','qualified_home_mortgage'):
             if not isinstance(normalized[-1][key], bool):
                 raise ValueError(f'{key} must be a boolean')
     for item in normalized:
@@ -290,7 +291,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             payment = number(debt['payment'], 'debt payment', 0, 1e15)
         debt_rows.append(dict(balance=balance, rate=rate, payment=payment,
             extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance,
-            balance_only=balance_only, nominal=flag(debt, 'nominal', False)))
+            balance_only=balance_only, nominal=flag(debt, 'nominal', False),qualified_home_mortgage=flag(debt,'qualified_home_mortgage',False)))
     initial_debt = sum(d['balance'] for d in debt_rows)
     def allocation_index(key):
         ident = plan.get(key)
@@ -312,7 +313,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             loan, months = item['loan_amount'], item['loan_months']
             payment = loan * rate / (1 - (1 + rate) ** -months) if rate else loan / months
             debt_rows.append(dict(balance=0.0, rate=rate, payment=payment, extra=0.0, months=months,
-                                  origin=item['month'], principal=loan, purchase_id=item['id'], nominal=item['nominal_loan']))
+                                  origin=item['month'], principal=loan, purchase_id=item['id'], nominal=item['nominal_loan'],qualified_home_mortgage=item['qualified_home_mortgage']))
     def resolve(rows, key, label):
         for item in purchases:
             ident = item[key]
@@ -362,7 +363,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     first_retirement_shortfall = None
     retirement_shortfall_months = longest_retirement_shortfall_months = consecutive_retirement_shortfall = 0
     retirement_essential_unfunded = retirement_desired_unfunded = 0.0
-    fields = ('conversion_gross', 'conversion_tax', 'income_taxes', 'rmd_gross', 'income', 'expenses', 'essential_expenses', 'funded_expenses', 'unfunded', 'payroll_contributions', 'household_account_contributions', 'account_contribution_due', 'account_contribution_unfunded', 'withdrawal_taxes', 'debt_inflation_adjustment', 'purchase_funding_gap', 'purchase_blocked',
+    fields = ('tax_refund_income', 'conversion_gross', 'conversion_tax', 'income_taxes', 'rmd_gross', 'income', 'expenses', 'essential_expenses', 'funded_expenses', 'unfunded', 'payroll_contributions', 'household_account_contributions', 'account_contribution_due', 'account_contribution_unfunded', 'withdrawal_taxes', 'debt_inflation_adjustment', 'purchase_funding_gap', 'purchase_blocked',
               'essential_unfunded', 'desired_expenses', 'desired_unfunded', 'debt_payment', 'debt_due', 'debt_unfunded', 'debt_interest', 'debt_principal', 'gain', 'fees', 'purchase_due', 'purchase_paid', 'purchase_unfunded', 'purchase_upkeep', 'purchase_asset_added', 'purchase_loan_drawn', 'purchase_sale_proceeds', 'purchase_sale_costs', 'purchase_debt_payoff', 'child_contributions', 'child_contribution_due', 'child_education', 'child_education_due', 'child_unfunded')
     for month in range(1, p['horizon'] * 12 + 1):
         tax_ledger.begin_month()
@@ -404,7 +405,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         gross_taxable_income=sum(value for row,value in amounts if row['kind']=='income' and row['tax_kind'])
         income_taxes=tax_ledger.income_tax(month,gross_taxable_income) if tax_ledger.enabled else 0.0
         wage_net,wage_ids=tax_ledger.wage_net(month) if tax_ledger.enabled else (None,set())
-        income = sum(value for row, value in amounts if row['kind'] == 'income' and row['id'] not in wage_ids)-income_taxes+(wage_net or 0)
+        tax_refund_income=tax_ledger.refund(month) if tax_ledger.enabled else 0.0
+        income = sum(value for row, value in amounts if row['kind'] == 'income' and row['id'] not in wage_ids)-income_taxes+(wage_net or 0)+tax_refund_income
         essential = sum(value for row, value in amounts if row['kind'] == 'expense' and row['essential'])
         essential = max(0.0, essential - sum(item['replaces_expense_monthly'] for item in purchases
                         if item.get('closed') and item['month'] < month < item['replaces_expense_end_month']) -
@@ -451,6 +453,9 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         essential_paid, essential_unfunded = pay(essential)
         debt_payment = debt_due = debt_unfunded = debt_interest = debt_principal = debt_inflation_adjustment = 0.0
         debt_ledger = []
+        qualified_interest=0.0
+        qualified_debt=sum(d['balance'] for d in debt_rows if d.get('qualified_home_mortgage'))
+        debt_limit_factor=min(1,750000/tax_ledger.price(month)/qualified_debt) if tax_ledger.enabled and qualified_debt else 1.0
         for debt in debt_rows:
             if debt.get('balance_only'):
                 debt_ledger.append(dict(opening=debt['balance'], interest=0, due=0, payment=0,
@@ -485,6 +490,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 debt_unfunded += unpaid
                 debt['arrears'] = arrears + unpaid
             debt_interest += interest
+            if debt.get('qualified_home_mortgage'):qualified_interest+=min(paid,interest)*debt_limit_factor
             # Payments settle accrued interest first. If cash is insufficient even
             # for interest, the unpaid interest is capitalized above; it is not
             # negative principal repayment.
@@ -599,6 +605,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 balances.append(0.0)
                 available_indices.append(len(accounts))
             balances[-1] += cash
+        if tax_ledger.enabled:
+            property_tax=sum(item['property_tax_annual']/12 for item in purchases if item.get('closed') and item['month']<month)
+            tax_ledger.record_home_deductions(month,qualified_interest,property_tax)
+            tax_ledger.settle_year(month)
         tax_ledger.finish_month(month,balances)
         closing = sum(balances) + asset_value
         if not math.isfinite(closing):
@@ -613,7 +623,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         row = dict(month=month, opening=opening, closing=closing, balance=closing,
             available_balance=sum(balances[i] for i in available_indices), net_worth=closing-debt_balance,
             gain=gain, fees=fee, income=income, expenses=essential+desired+purchase_due+upkeep+child_cash['contribution_due']+child_cash['education_due'], essential_expenses=essential,
-            conversion_gross=conversion_gross,conversion_tax=conversion_tax,income_taxes=income_taxes,rmd_gross=rmd_gross, payroll_contributions=payroll_contributions, withdrawal_taxes=withdrawal_taxes, debt_inflation_adjustment=debt_inflation_adjustment,
+            tax_refund_income=tax_refund_income,conversion_gross=conversion_gross,conversion_tax=conversion_tax,income_taxes=income_taxes,rmd_gross=rmd_gross, payroll_contributions=payroll_contributions, withdrawal_taxes=withdrawal_taxes, debt_inflation_adjustment=debt_inflation_adjustment,
             household_account_contributions=household_account_contributions, account_contribution_due=account_contribution_due, account_contribution_unfunded=account_contribution_unfunded,
             purchase_funding_gap=purchase_funding_gap, purchase_blocked=purchase_blocked,
             purchase_due=purchase_due, purchase_paid=purchase_paid, purchase_unfunded=purchase_unfunded, purchase_upkeep=upkeep,
@@ -683,7 +693,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         first_retirement_shortfall_age=p['age']+(first_retirement_shortfall/12) if first_retirement_shortfall else None,
         retirement_shortfall_months=retirement_shortfall_months,longest_retirement_shortfall_months=longest_retirement_shortfall_months,
         retirement_essential_unfunded=retirement_essential_unfunded,retirement_desired_unfunded=retirement_desired_unfunded,
-        rmd_gross=sum(r['rmd_gross'] for r in annual),
+        rmd_gross=sum(r['rmd_gross'] for r in annual),tax_refund_income=sum(r['tax_refund_income'] for r in annual),
         retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance, **target_fields)
     return dict(**target_fields, tax_analysis=tax_ledger.report(), children=children, future_purchases=purchases, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
         accumulation_shortfall=accumulation_shortfall,

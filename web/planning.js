@@ -48,7 +48,7 @@ const baseRenderRunHistory=renderRunHistory;
 renderRunHistory=function(){const all=runHistory;try{if(!showHistoricalScenarios)runHistory=all.filter(r=>!archivedScenarioIds().has(r.scenario_id));baseRenderRunHistory()}finally{runHistory=all}};
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-open-planning-run]');if(b){try{const {job}=await api(`/api/jobs/${encodeURIComponent(b.dataset.openPlanningRun)}`);renderSavedRun(job);$('run-detail').scrollIntoView({behavior:'smooth'})}catch(err){tell(err.message,true)}}});
 const baseRenderSavedRun=renderSavedRun;
-renderSavedRun=function(job){baseRenderSavedRun(job);if(!['2.2.0','2.2.1','2.3.0'].includes(job.result?.metadata?.engine_version)){$('run-detail').insertAdjacentHTML('afterbegin','<p class="method-note">Historical calculation: this result predates the current contribution, access, withdrawal-tax and closing checks. Open a current comparison for the revised model.</p>')}};
+renderSavedRun=function(job){baseRenderSavedRun(job);if(job.result?.metadata?.engine_version!=='2.3.0'){$('run-detail').insertAdjacentHTML('afterbegin','<p class="method-note">Historical calculation: this result predates the current tax,basis,RMD,conversion and source-input model. Open a current comparison for the revised model.</p>')}};
 
 // Refresh saved data when returning to this tab, while preserving unsaved edits.
 let checkingPlanVersion=false;

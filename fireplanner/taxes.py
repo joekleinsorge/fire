@@ -16,6 +16,8 @@ SOURCES = [
     "https://www.irs.gov/publications/p590b",
     "https://www.irs.gov/irb/2024-33_IRB",
     "https://www.irs.gov/irb/2025-32_IRB",
+    "https://www.irs.gov/publications/p936",
+    "https://www.irs.gov/forms-pubs/correction-to-state-and-local-income-tax-deduction-amount-in-the-2026-form-1040-es",
 ]
 LIMITS = [
     (24800, 0.10),
@@ -190,6 +192,7 @@ class TaxLedger:
         self.config = config
         self.years = {}
         self.previous_december = {}
+        self.pending_refunds = {}
         self.basis = [a.get("cost_basis") for a in accounts]
         if not self.enabled:
             return
@@ -399,6 +402,10 @@ class TaxLedger:
                 tax=0.0,
                 surcharge=0.0,
                 distributions={},
+                mortgage_interest=0.0,
+                property_tax=0.0,
+                refund_due=0.0,
+                salt_deduction=0.0,
                 factor=factor,
                 children=children,
             )
@@ -674,6 +681,46 @@ class TaxLedger:
             net += drawn - withheld
         return gross, net, tax
 
+    def record_home_deductions(self, month, interest, property_tax):
+        state = self.state(month)
+        state["mortgage_interest"] += interest
+        state["property_tax"] += property_tax
+
+    def refund(self, month):
+        year, calendar_month = self.calendar(month)
+        return (
+            self.pending_refunds.pop(year, 0) / (1 + self.inflation) ** (1 / 12)
+            if calendar_month == 1
+            else 0.0
+        )
+
+    def settle_year(self, month):
+        year, calendar_month = self.calendar(month)
+        if calendar_month != 12:
+            return
+        state = self.state(month)
+        before = self.liability(state, state["ordinary"], state["gains"])
+        # Statutory SALT increase expires after2029 under the reviewed law.
+        index = 1.01 ** max(0, year - 2026)
+        cap = (40400 * index if year <= 2029 else 10000) * state["factor"]
+        if year <= 2029:
+            cap = max(
+                10000 * state["factor"],
+                cap - 0.30 * max(0, before["agi"] - 505000 * index * state["factor"]),
+            )
+        state["salt_deduction"] = min(state["property_tax"], cap)
+        itemized = state["mortgage_interest"] + state["salt_deduction"]
+        if itemized > state["deduction"]:
+            # The37%-bracket itemized limitation and AMT are outside this module.
+            if before["ordinary_taxable"] > 768700:
+                raise ValueError(
+                    "High-income itemized limitation/AMT requires a reviewed tax projection"
+                )
+            state["deduction"] = itemized
+            after = self.liability(state, state["ordinary"], state["gains"])
+            state["refund_due"] = max(0, before["total_tax"] - after["total_tax"])
+            self.pending_refunds[year + 1] = state["refund_due"]
+
     def finish_month(self, month, balances):
         if self.enabled and self.calendar(month)[1] == 12:
             self.previous_december = {
@@ -699,6 +746,10 @@ class TaxLedger:
                     incremental_withdrawal_tax=s["tax"],
                     additional_tax_stress=s["surcharge"],
                     base_context_tax=base["total_tax"],
+                    mortgage_interest_deduction=s["mortgage_interest"],
+                    salt_deduction=s["salt_deduction"],
+                    deduction_used=s["deduction"],
+                    refund_due=s["refund_due"],
                     **full,
                 )
             )
@@ -709,10 +760,11 @@ class TaxLedger:
             sources=SOURCES,
             method="2026 MFJ Florida ordinary/LTCG/SS/NIIT rules; indexed thresholds held in real dollars; non-indexed thresholds deflated. Wage net pay is recalculated from declared gross schedules when enabled; explicit residual deductions are retained. Investment/withdrawal taxes are charged once; no second charge for baseline wage/context taxes.",
             limitations=[
-                "Planning rules held constant, not forecasts of future legislation. Standard deduction only; no AMT,QBI,itemization,foreign income,loss carryovers or special gains.",
+                "Planning rules held constant, not forecasts of future legislation. Standard or entered eligible mortgage/property-tax itemization with modeled annual refunds; no AMT,QBI,other itemization,foreign income,loss carryovers or special gains.",
                 "Taxable gains use proportional basis and an entered short-term fraction; actual lot selection is not modeled. Entered investment income yields are part of total return and taxed once; unknown yields are not inferred.",
                 "Qualified Roth access and all-pretax account treatment require confirmation; no early Roth basis or five-year conversion access inferred.",
                 "RMDs use Uniform Lifetime Table and entered owner birth year, paid by December31; inherited accounts,working-employer exceptions and spouses over10years younger excluded.",
+                "Mortgage interest uses monthly qualified-debt caps as a planning approximation; mixed grandfathered debt,points,rental use and actual escrow tax-disbursement timing require review. Itemized benefit is settled the followingJanuary,not free closing cash.",
                 "ACA credits,Medicare IRMAA,estate taxes and survivor filing transitions require separate reviewed inputs.",
             ],
         )

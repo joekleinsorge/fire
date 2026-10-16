@@ -166,8 +166,16 @@ blocked events do not transfer assets. Converted Roth money is not unlocked
 early. RMD-year conversion ordering is explicitly unsupported.
 
 Full results contain calendar-year `tax_analysis` and per-month accounting.
+Eligible post2017 qualified home mortgage interest and property taxes may
+be itemized when better than standard deduction. The monthly acquisition-debt
+limit is750,000 nominal; statutory SALT caps/phaseouts apply,including the
+2030 reversion to10,000. A funded closing is required. The benefit is a modeled
+following-January refund,not closing cash; actual W-4/escrow disbursement timing
+requires reconciliation. Mixed grandfathered debt and37%-bracket itemized
+limitations are not inferred.
+
 This is a bounded current-law planning model, not future-law prediction or
-a return-preparation engine. AMT, itemization, QBI, loss carryovers, inherited
+a return-preparation engine. AMT, other itemization, QBI, loss carryovers, inherited
 IRA rules, exact lots, ACA eligibility, IRMAA, and survivor filing transitions
 remain outside this module. `/api/analyze` supports `federal_tax` and
 full-year `healthcare` reference arithmetic for2026.

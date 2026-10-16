@@ -376,3 +376,49 @@ class TaxTests(unittest.TestCase):
         p["child_accounts"][0]["pilot_eligibility_confirmed"] = False
         with self.assertRaisesRegex(ValueError, "Confirm all pilot"):
             project(p)
+
+    def test_itemized_refund_follows_funded_closing_only(self):
+        config = {
+            "enabled": True,
+            "jurisdiction": "US-MFJ-FL-2026",
+            "income_context": [
+                dict(kind="ordinary", amount=300000 / 12, start_month=1, end_month=25)
+            ],
+        }
+        p = self.plan(
+            horizon=2,
+            tax_model=config,
+            accounts=[
+                dict(
+                    id="cash",
+                    type="cash",
+                    balance=1000000,
+                    return_rate=0,
+                    tax_treatment="cash",
+                )
+            ],
+            streams=[dict(kind="income", amount=15000)],
+            future_purchases=[
+                dict(
+                    id="house",
+                    name="House",
+                    amount=800000,
+                    loan_amount=700000,
+                    loan_rate=0.06,
+                    loan_months=360,
+                    month=1,
+                    require_full_funding=True,
+                    annual_upkeep=12000,
+                    property_tax_annual=12000,
+                    qualified_home_mortgage=True,
+                )
+            ],
+        )
+        r = project(p)
+        self.assertGreater(r["tax_analysis"]["annual"][0]["refund_due"], 0)
+        self.assertEqual(r["monthly"][0]["tax_refund_income"], 0)
+        self.assertGreater(r["monthly"][12]["tax_refund_income"], 0)
+        p["accounts"][0]["balance"] = 0
+        r = project(p)
+        self.assertEqual(r["summary"]["blocked_purchases"], 1)
+        self.assertEqual(r["summary"]["tax_refund_income"], 0)

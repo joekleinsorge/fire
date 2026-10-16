@@ -255,6 +255,32 @@ def apply(plan, payload):
                 context["net_adjustment_per_payment"] = 0
                 estimate = TaxLedger(q, q["accounts"]).wage_net(1)[0]
                 context["net_adjustment_per_payment"] = estimate - base
+        if d.get("net_bonus_quarterly") is not None and q.get("tax_model", {}).get(
+            "enabled"
+        ):
+            from .taxes import TaxLedger
+
+            for context in q["tax_model"].get("income_context", []):
+                if context.get("role") != "bonus_wages":
+                    continue
+                month = context.get("start_month", 1)
+                context["net_adjustment_per_payment"] = 0
+                ledger = TaxLedger(q, q["accounts"])
+                all_net = ledger.wage_net(month)[0]
+                # Isolate the bonus by evaluating that month without its context.
+                without = deepcopy(q)
+                without["tax_model"]["income_context"] = [
+                    r
+                    for r in without["tax_model"]["income_context"]
+                    if r.get("role") != "bonus_wages"
+                ]
+                # Base withholding allocates the child credit before the bonus.
+                bonus_net = (
+                    all_net - TaxLedger(without, without["accounts"]).wage_net(month)[0]
+                )
+                context["net_adjustment_per_payment"] = (
+                    bonus_net - d["net_bonus_quarterly"]
+                )
         c = q.setdefault("compensation_summary", {})
         c.update(
             net_base_monthly=base,
