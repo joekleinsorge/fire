@@ -73,7 +73,7 @@ advancedCosts.oninput=()=>updatePurchasePreview();
 
 // Coverage is saved with the household plan; comparisons use durable results.
 function renderPlanningCoverage(){
-  const rows=plan.planning_coverage||[];
+  const rows=(plan.planning_coverage||[]).map(r=>({...r,scenario_ids:scenarios.filter(s=>!archivedScenarioIds().has(s.id)&&s.data?.metadata?.group===r.group).map(s=>s.id)}));
   const panel=planningPanel('planning-coverage','overview');panel.hidden=!rows.length;
   $('view-overview').querySelector('.kpi-grid').after(panel);
   panel.innerHTML=`<p class="eyebrow">YOUR PLANNING CHECKLIST</p><h2>What this plan covers</h2><p>Modeled means an explicit scenario exists. It does not mean a purchase is affordable or the inputs are confirmed.</p><div class="table-scroll"><table><thead><tr><th>Goal</th><th>Coverage</th><th>Included and still needed</th></tr></thead><tbody>${rows.map(r=>`<tr><td><strong>${esc(r.goal)}</strong>${r.scenario_ids?.length?`<br><button class="link-button" data-coverage-group="${esc(r.group)}">View ${r.scenario_ids.length} comparisons ↗</button>`:''}</td><td>${esc(r.status)}</td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>`;
@@ -84,7 +84,7 @@ const coveredRenderReview=renderPlanningReview;
 renderPlanningReview=function(){coveredRenderReview();renderPlanningCoverage()};
 const coveredRenderScenarios=renderScenarios;
 renderScenarios=function(){
-  coveredRenderScenarios();
+  coveredRenderScenarios();renderPlanningCoverage();
   const archived=archivedScenarioIds(),active=scenarios.filter(s=>!archived.has(s.id));
   const rows=active.filter(s=>scenarioGroup==='All'||s.data?.metadata?.group===scenarioGroup);
   const base=active.find(s=>scenarioName(s)==='Keep current home — base');
