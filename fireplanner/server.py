@@ -202,6 +202,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                             'comparison':{'basis':'age','annual':annual}})
                     if action=='run' and self.command=='POST':
                         return self.send(202,{'job':store.enqueue(user,ident,data)})
+                    if action=='latest-runs' and self.command=='GET':
+                        return self.send(200,store.latest_runs(user,ident))
                     if action=='runs' and self.command=='GET':
                         query=parse_qs(urlsplit(self.path).query)
                         return self.send(200,store.runs(user,ident,int(query.get('limit',['50'])[0]),query.get('before',[None])[0]))

@@ -1550,6 +1550,67 @@
           }
         }
       }
+    },
+    "/api/plans/{id}/latest-runs": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          }
+        },
+        {
+          "name": "before",
+          "in": "query",
+          "schema": {
+            "type": "string"
+          },
+          "description": "next_cursor from the preceding page"
+        }
+      ],
+      "get": {
+        "operationId": "latestRuns",
+        "summary": "Latest completed summary for each scenario and calculation kind",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        },
+        "parameters": []
+      }
     }
   },
   "components": {

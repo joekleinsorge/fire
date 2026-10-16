@@ -160,3 +160,16 @@ class DurableRunsTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in responses],[1,2,3])
         self.assertTrue(any(t['name']=='run_scenario' for t in responses[1]['result']['tools']))
         self.assertEqual(responses[2]['result']['structuredContent'],{'plans':[]})
+
+    def test_latest_results_are_independent_of_history_pagination(self):
+        user,cookie=self.register('latest@example.test');saved=self.baseline(cookie);route='/api/plans/'+saved['id']
+        with self.server.store.connect() as db:
+            for i in range(65):
+                db.execute("INSERT INTO jobs(id,household,plan_id,kind,payload,status,created,result) VALUES(?,?,?,?,?,?,?,?)",
+                    (f'job-{i:03}',user['household'],saved['id'],'project',json.dumps({'scenario_id':str(i%2) if i else 'old','scenario_name':'Test'}),'completed',i,json.dumps({'summary':{'test':i}})))
+        self.assertEqual(len(self.request('GET',route+'/runs',cookie=cookie)[1]['runs']),50)
+        status,result,_=self.request('GET',route+'/latest-runs',cookie=cookie)
+        self.assertEqual(status,200)
+        self.assertEqual({r['id'] for r in result['runs']},{'job-000','job-063','job-064'})
+        _,other=self.register('outside@example.test')
+        self.assertEqual(self.request('GET',route+'/latest-runs',cookie=other)[0],404)

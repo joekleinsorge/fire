@@ -371,8 +371,25 @@ class Store:
                 where+=' AND (created<? OR (created=? AND id<?))'
                 params.extend((cursor['created'],cursor['created'],cursor['id']))
             rows=db.execute(f'SELECT * FROM jobs WHERE {where} ORDER BY created DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
+        runs=self._summarize_runs(rows[:limit],ident)
+        return dict(runs=runs,next_cursor=rows[limit-1]['id'] if len(rows)>limit else None)
+
+    def latest_runs(self, user, ident):
+        """One completed summary per scenario and calculation kind, across history."""
+        self.plan(user,ident)
+        with self.connect() as db:
+            rows=db.execute("""WITH ranked AS (
+                SELECT id,ROW_NUMBER() OVER (
+                    PARTITION BY json_extract(payload,'$.scenario_id'),kind
+                    ORDER BY created DESC,id DESC) AS position
+                FROM jobs WHERE plan_id=? AND household=? AND status='completed'
+                ) SELECT jobs.* FROM jobs JOIN ranked USING(id) WHERE ranked.position=1
+                ORDER BY jobs.created DESC,jobs.id DESC""",(ident,user['household'])).fetchall()
+        return dict(runs=self._summarize_runs(rows,ident))
+
+    def _summarize_runs(self, rows, ident):
         runs=[]
-        for row in rows[:limit]:
+        for row in rows:
             snapshot=json.loads(row['payload'])
             result=json.loads(row['result']) if row['result'] else None
             runs.append(dict(id=row['id'],plan_id=ident,kind=row['kind'],status=row['status'],created=row['created'],
@@ -380,7 +397,7 @@ class Store:
                 name=snapshot.get('scenario_name') or snapshot.get('plan_name') or 'Plan calculation',
                 settings=snapshot.get('settings',{}),metadata=snapshot.get('metadata',{}),
                 scenario_metadata=snapshot.get('scenario_metadata',{}),result=run_summary(result)))
-        return dict(runs=runs,next_cursor=rows[limit-1]['id'] if len(rows)>limit else None)
+        return runs
 
     def members(self, user):
         with self.connect() as db:

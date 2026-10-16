@@ -114,3 +114,8 @@ Its upkeep stops in the month after that referenced purchase successfully closes
 A blocked or disabled closing leaves the original upkeep in place. This supports
 a pool installed before a move without charging its upkeep after the property
 is sold. References must identify another purchase in the snapshot.
+
+`GET /api/plans/{id}/latest-runs` returns one completed result summary per
+scenario and calculation kind, independent of history pagination. It requires
+the same household access as the plan. Full immutable results remain available
+through each returned job ID.
