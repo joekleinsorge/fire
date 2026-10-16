@@ -1,0 +1,2076 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Open FI local planning API",
+    "version": "1.0.0",
+    "description": "The browser and API share saved plans, permissions, calculations, and immutable revisions. Bearer sessions expire after 24 hours. Metadata is preserved but does not affect financial arithmetic."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Check server health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/capabilities": {
+      "get": {
+        "operationId": "capabilities",
+        "summary": "Read calculation capabilities",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/token": {
+      "post": {
+        "operationId": "loginToken",
+        "summary": "Create a 24-hour bearer session",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "type": "string"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    },
+                    "user": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "identity",
+        "summary": "Read current identity",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "Revoke current session",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans": {
+      "get": {
+        "operationId": "listPlans",
+        "summary": "List household plans",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plans": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Envelope"
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPlan",
+        "summary": "Create a validated plan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "plan": {
+                    "$ref": "#/components/schemas/Plan"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{id}": {
+      "get": {
+        "operationId": "readPlan",
+        "summary": "Read saved plan inputs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "replacePlan",
+        "summary": "Replace plan with optimistic version checking",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "plan": {
+                    "$ref": "#/components/schemas/Plan"
+                  }
+                },
+                "required": [
+                  "version",
+                  "plan"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchPlan",
+        "summary": "Merge plan inputs or metadata with version checking",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Patch"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/project": {
+      "post": {
+        "operationId": "project",
+        "summary": "Calculate supplied plan without saving",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "plan": {
+                    "$ref": "#/components/schemas/Plan"
+                  }
+                },
+                "required": [
+                  "plan"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{id}/revisions": {
+      "get": {
+        "operationId": "revisions",
+        "summary": "Read saved revision history",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/plans/{id}/run": {
+      "post": {
+        "operationId": "run",
+        "summary": "Log a calculation with immutable inputs and stored results",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "project",
+                      "simulate"
+                    ]
+                  },
+                  "settings": {
+                    "type": "object"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "operationId": "job",
+        "summary": "Read original immutable input snapshot, status, settings, provenance, and stored full result",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/jobs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelJob",
+        "summary": "Cancel queued or active job",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/plans/{id}/scenarios": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listScenarios",
+        "summary": "List immutable saved scenarios",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createScenario",
+        "summary": "Save a named alternative with preserved baseline",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{id}/scenarios/{scenario_id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "scenario_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "readScenario",
+        "summary": "Read exact saved assumptions, baseline, and metadata",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        }
+      }
+    },
+    "/api/plans/{id}/scenarios/{scenario_id}/run": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "scenario_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "runScenario",
+        "summary": "Log a calculation of a saved scenario; fixed runs also retain baseline results",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "project",
+                      "simulate"
+                    ]
+                  },
+                  "settings": {
+                    "type": "object"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{id}/runs": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          }
+        },
+        {
+          "name": "before",
+          "in": "query",
+          "schema": {
+            "type": "string"
+          },
+          "description": "next_cursor from the preceding page"
+        }
+      ],
+      "get": {
+        "operationId": "listRuns",
+        "summary": "Read saved history summaries with next_cursor pagination",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Saved version changed"
+          },
+          "404": {
+            "description": "Resource not found for this household"
+          },
+          "403": {
+            "description": "Role cannot perform this operation"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Account": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "cash",
+              "investment",
+              "retirement",
+              "property",
+              "other"
+            ]
+          },
+          "balance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "return_rate": {
+            "type": "number",
+            "exclusiveMinimum": -1,
+            "maximum": 10,
+            "description": "Decimal annual real return: 0.04 = 4%."
+          },
+          "fee_rate": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMaximum": 1
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "source_details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "balance"
+        ],
+        "additionalProperties": true
+      },
+      "Stream": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "income",
+              "expense"
+            ]
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "every_months": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "start_month": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Inclusive; month 1 follows the valuation month."
+          },
+          "end_month": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Exclusive."
+          },
+          "growth_rate": {
+            "type": "number",
+            "exclusiveMinimum": -1,
+            "maximum": 10,
+            "description": "Decimal annual real return: 0.04 = 4%."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "essential": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "amount"
+        ],
+        "additionalProperties": true
+      },
+      "Debt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "balance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "annual_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "months": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payment": {
+            "type": "number",
+            "minimum": 0
+          },
+          "extra_payment": {
+            "type": "number",
+            "minimum": 0
+          },
+          "balance_only": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "balance"
+        ],
+        "additionalProperties": true
+      },
+      "Member": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "birth_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "birth_date"
+        ],
+        "additionalProperties": true
+      },
+      "ChildAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "529",
+              "trump"
+            ]
+          },
+          "beneficiary_id": {
+            "type": "string"
+          },
+          "balance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "return_rate": {
+            "type": "number",
+            "exclusiveMinimum": -1,
+            "maximum": 10,
+            "description": "Decimal annual real return: 0.04 = 4%."
+          },
+          "fee_rate": {
+            "type": "number"
+          },
+          "annual_contribution": {
+            "type": "number",
+            "minimum": 0
+          },
+          "start_year": {
+            "type": "integer"
+          },
+          "end_year": {
+            "type": "integer"
+          },
+          "contribution_source": {
+            "enum": [
+              "household",
+              "external"
+            ]
+          },
+          "education_annual_withdrawal": {
+            "type": "number",
+            "minimum": 0
+          },
+          "education_start_age": {
+            "type": "integer"
+          },
+          "education_years": {
+            "type": "integer"
+          },
+          "cover_education_shortfall": {
+            "type": "boolean"
+          },
+          "employer_contribution": {
+            "type": "number",
+            "minimum": 0
+          },
+          "employer_contributor_id": {
+            "type": "string"
+          },
+          "pilot_contribution": {
+            "type": "number",
+            "minimum": 0
+          },
+          "pilot_year": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "Purchase": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "month": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "annual_upkeep": {
+            "type": "number",
+            "minimum": 0
+          },
+          "upkeep_years": {
+            "type": "integer"
+          },
+          "loan_amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "loan_rate": {
+            "type": "number"
+          },
+          "loan_months": {
+            "type": "integer"
+          },
+          "adds_asset": {
+            "type": "boolean"
+          },
+          "asset_return": {
+            "type": "number",
+            "exclusiveMinimum": -1,
+            "maximum": 10,
+            "description": "Decimal annual real return: 0.04 = 4%."
+          },
+          "sell_account_id": {
+            "type": "string"
+          },
+          "sell_cost_rate": {
+            "type": "number"
+          },
+          "payoff_debt_id": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "Plan": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "valuation_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "age": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150
+          },
+          "retirement_age": {
+            "type": "integer"
+          },
+          "horizon": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 150
+          },
+          "return_rate": {
+            "type": "number",
+            "exclusiveMinimum": -1,
+            "maximum": 10,
+            "description": "Decimal annual real return: 0.04 = 4%."
+          },
+          "withdrawal_rate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Stream"
+            }
+          },
+          "debts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Debt"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            }
+          },
+          "child_accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChildAccount"
+            }
+          },
+          "future_purchases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Purchase"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "household_source": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "unresolved_inputs": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "import_warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "Envelope": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "plan"
+        ],
+        "additionalProperties": true
+      },
+      "Patch": {
+        "type": "object",
+        "required": [
+          "version",
+          "changes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "JSON Merge Patch of plan inputs. Objects merge, arrays replace, null deletes. Version conflict returns 409."
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "ScenarioRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "base_version",
+          "changes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "base_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "description": "Version-checked JSON Merge Patch of the saved baseline; creates an immutable full scenario and baseline snapshot."
+      }
+    }
+  }
+}

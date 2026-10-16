@@ -11,6 +11,29 @@ import time
 from pathlib import Path
 
 
+def merge_inputs(target, changes, depth=0):
+    if depth > 50:
+        raise ValueError('Changes are nested too deeply')
+    result = dict(target) if isinstance(target, dict) else {}
+    for key, value in changes.items():
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, dict):
+            result[key] = merge_inputs(result.get(key), value, depth+1)
+        else:
+            result[key] = value
+    return result
+
+
+def run_summary(result):
+    if result is None:
+        return None
+    keys = ('target','fi_age','earliest_fi_age','years_to_target','summary','outcomes',
+            'ending_assets','completed','status','metadata','essential_spending_funded',
+            'desired_lifestyle_funded','portfolio_survives')
+    return {key: result[key] for key in keys if key in result}
+
+
 class Store:
     def __init__(self, path):
         self.path = str(path)
@@ -120,6 +143,8 @@ class Store:
         plan = data.get('plan', {})
         if not isinstance(plan, dict):
             raise ValueError('plan must be an object')
+        if 'metadata' in plan and not isinstance(plan['metadata'], dict):
+            raise ValueError('metadata must be an object')
         from .engine import project
         project(plan)  # Validate the full account/stream contract before persistence.
         name = str(data.get('name', 'My retirement plan')).strip()[:200] or 'My retirement plan'
@@ -140,6 +165,20 @@ class Store:
                 db.execute('INSERT INTO plans VALUES(?,?,?,?,?)', (ident,user['household'],name,version,encoded))
             db.execute('INSERT INTO revisions VALUES(?,?,?,?)', (ident,version,encoded,time.time()))
         return self.plan(user,ident)
+
+    def patch_plan(self, user, ident, data):
+        """Versioned JSON Merge Patch of plan inputs, preserving unrelated fields."""
+        self.writable(user)
+        if set(data) != {'version', 'changes'} or not isinstance(data['changes'], dict):
+            raise ValueError('PATCH requires version and a changes object')
+        if type(data['version']) is not int:
+            raise ValueError('version must be an integer')
+        current = self.plan(user, ident)
+        if current['version'] != data['version']:
+            raise FileExistsError('Plan changed; reload before saving')
+
+        plan = merge_inputs(current['plan'], data['changes'])
+        return self.save(user, {'version': data['version'], 'name': plan.get('name', current['name']), 'plan': plan}, ident)
 
     def fork(self, user, ident, data):
         self.writable(user)
@@ -172,16 +211,35 @@ class Store:
                 raise LookupError('Plan not found')
         return True
 
-    def records(self, user, ident, kind, data=None):
+    def records(self, user, ident, kind, data=None, return_created=False):
         if kind not in ('observations', 'scenarios'):
             raise ValueError('Unsupported record type')
-        self.plan(user,ident)
+        parent = self.plan(user,ident)
         if data is not None:
             if not isinstance(data,dict):
                 raise ValueError('Record must be an object')
             if kind == 'scenarios':
-                if not {'name', 'plan'} <= set(data) or not set(data) <= {'name', 'plan', 'baseline_plan'}:
-                    raise ValueError('Scenario must contain name and plan, with an optional baseline_plan')
+                if 'changes' in data:
+                    if not {'name','base_version','changes'} <= set(data) or not set(data) <= {'name','base_version','changes','metadata'}:
+                        raise ValueError('Scenario changes require name, base_version, changes, and optional metadata')
+                    if type(data['base_version']) is not int or data['base_version'] != parent['version']:
+                        raise FileExistsError('Plan changed; reload before creating the scenario')
+                    if not isinstance(data['changes'], dict):
+                        raise ValueError('Scenario changes must be an object')
+                    data = dict(name=data['name'],plan=merge_inputs(parent['plan'],data['changes']),
+                        baseline_plan=parent['plan'],base_version=parent['version'],metadata=data.get('metadata',{}))
+                if not {'name', 'plan'} <= set(data) or not set(data) <= {'name', 'plan', 'baseline_plan', 'base_version', 'metadata'}:
+                    raise ValueError('Scenario must contain name and plan, with optional baseline_plan, base_version, and metadata')
+                if 'metadata' in data and not isinstance(data['metadata'],dict):
+                    raise ValueError('Scenario metadata must be an object')
+                if 'base_version' in data:
+                    version = data['base_version']
+                    if type(version) is not int or version < 1:
+                        raise ValueError('base_version must be a positive integer')
+                    with self.connect() as db:
+                        revision = db.execute('SELECT plan FROM revisions WHERE plan_id=? AND version=?',(ident,version)).fetchone()
+                    if not revision or data.get('baseline_plan') != json.loads(revision['plan']):
+                        raise ValueError('baseline_plan must match the specified saved revision')
                 name=data['name']
                 if not isinstance(name,str) or not name.strip() or len(name.strip())>100:
                     raise ValueError('Scenario name must be 1–100 characters')
@@ -197,7 +255,8 @@ class Store:
                     if (baseline.get('currency', 'USD') != data['plan'].get('currency', 'USD')
                             or baseline.get('valuation_date') != data['plan'].get('valuation_date')):
                         raise ValueError('Scenario and baseline must share currency and valuation date')
-                data=dict(name=name.strip(),plan=data['plan'], **({'baseline_plan':baseline} if baseline is not None else {}))
+                data=dict(name=name.strip(),plan=data['plan'], **({'baseline_plan':baseline} if baseline is not None else {}),
+                    **({key:data[key] for key in ('base_version','metadata') if key in data}))
             else:
                 allowed={'date','balance','note'}
                 if not {'date','balance'} <= set(data) or not set(data) <= allowed:
@@ -220,9 +279,13 @@ class Store:
         with self.connect() as db:
             if data is not None:
                 self.writable(user)
-                db.execute('INSERT INTO records VALUES(?,?,?,?,?)', (secrets.token_hex(16),ident,kind,json.dumps(data,allow_nan=False),time.time()))
+                record_id=secrets.token_hex(16)
+                db.execute('INSERT INTO records VALUES(?,?,?,?,?)', (record_id,ident,kind,json.dumps(data,allow_nan=False),time.time()))
             rows = db.execute('SELECT id,data,created FROM records WHERE plan_id=? AND kind=? ORDER BY created', (ident,kind)).fetchall()
-        return [dict(id=r['id'], data=json.loads(r['data']),created=r['created']) for r in rows]
+        records=[dict(id=r['id'], data=json.loads(r['data']),created=r['created']) for r in rows]
+        if return_created and data is not None:
+            return {'scenarios':records,'scenario':next(record for record in records if record['id']==record_id)}
+        return records
 
     def delete_record(self, user, ident, kind, record_id):
         if kind not in ('observations','scenarios'):
@@ -236,9 +299,24 @@ class Store:
             raise LookupError('Record not found')
         return True
 
-    def enqueue(self, user, ident, data):
+    def scenario(self, user, ident, scenario_id):
+        self.plan(user,ident)
+        with self.connect() as db:
+            row=db.execute("SELECT id,data,created FROM records WHERE id=? AND plan_id=? AND kind='scenarios'",(scenario_id,ident)).fetchone()
+        if not row:
+            raise LookupError('Scenario not found')
+        return dict(id=row['id'],data=json.loads(row['data']),created=row['created'])
+
+    def enqueue(self, user, ident, data, scenario_id=None):
         self.writable(user)
         plan = self.plan(user,ident)
+        if not set(data) <= {'kind','settings','metadata','version'}:
+            raise ValueError('Run accepts kind, settings, metadata, and optional version')
+        if not isinstance(data.get('settings',{}),dict) or not isinstance(data.get('metadata',{}),dict):
+            raise ValueError('Run settings and metadata must be objects')
+        if 'version' in data and (type(data['version']) is not int or data['version'] != plan['version']):
+            raise FileExistsError('Plan changed; reload before running')
+        scenario = self.scenario(user,ident,scenario_id)['data'] if scenario_id else None
         kind = data.get('kind','project')
         if kind not in ('project','simulate'):
             raise ValueError('Unknown run kind')
@@ -247,7 +325,14 @@ class Store:
             count = db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]
             if count >= 32:
                 raise ValueError('Work queue is full; try later')
-            payload = json.dumps(dict(plan=plan['plan'],plan_version=plan['version'],settings=data.get('settings',{})),allow_nan=False)
+            from .engine import VERSION
+            payload = json.dumps(dict(plan=scenario['plan'] if scenario else plan['plan'],
+                plan_version=scenario.get('base_version') if scenario else plan['version'],
+                plan_name=plan['name'],scenario_id=scenario_id,scenario_name=scenario['name'] if scenario else None,
+                baseline_plan=scenario.get('baseline_plan') if scenario else None,
+                scenario_metadata=scenario.get('metadata',{}) if scenario else {},
+                settings=data.get('settings',{}),metadata=data.get('metadata',{}),
+                requested_by=user['id'],submitted_engine_version=VERSION),allow_nan=False)
             db.execute('INSERT INTO jobs(id,household,plan_id,kind,payload,status,created) VALUES(?,?,?,?,?,?,?)',(job_id,user['household'],ident,kind,payload,'queued',time.time()))
         return self.job(user,job_id)
 
@@ -261,9 +346,39 @@ class Store:
                 db.execute("UPDATE jobs SET status='cancelled' WHERE id=? AND status IN ('queued','running')",(ident,))
                 row = db.execute('SELECT * FROM jobs WHERE id=?',(ident,)).fetchone()
         result = {k:row[k] for k in ('id','plan_id','kind','status','attempts','created','error')}
-        result['plan_version'] = json.loads(row['payload']).get('plan_version')
+        snapshot = json.loads(row['payload'])
+        result['plan_version'] = snapshot.get('plan_version')
+        result['snapshot'] = snapshot
+        result['scenario_id'] = snapshot.get('scenario_id')
+        result['scenario_name'] = snapshot.get('scenario_name')
+        result['name'] = snapshot.get('scenario_name') or snapshot.get('plan_name') or 'Plan calculation'
         result['result'] = json.loads(row['result']) if row['result'] else None
         return result
+
+    def runs(self, user, ident, limit=50, before=None):
+        self.plan(user,ident)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit must be an integer from 1 to 100')
+        with self.connect() as db:
+            params=[ident,user['household']]
+            where='plan_id=? AND household=?'
+            if before:
+                cursor=db.execute('SELECT created,id FROM jobs WHERE id=? AND plan_id=? AND household=?',(before,ident,user['household'])).fetchone()
+                if not cursor:
+                    raise LookupError('Run cursor not found')
+                where+=' AND (created<? OR (created=? AND id<?))'
+                params.extend((cursor['created'],cursor['created'],cursor['id']))
+            rows=db.execute(f'SELECT * FROM jobs WHERE {where} ORDER BY created DESC,id DESC LIMIT ?',(*params,limit+1)).fetchall()
+        runs=[]
+        for row in rows[:limit]:
+            snapshot=json.loads(row['payload'])
+            result=json.loads(row['result']) if row['result'] else None
+            runs.append(dict(id=row['id'],plan_id=ident,kind=row['kind'],status=row['status'],created=row['created'],
+                error=row['error'],plan_version=snapshot.get('plan_version'),scenario_id=snapshot.get('scenario_id'),
+                name=snapshot.get('scenario_name') or snapshot.get('plan_name') or 'Plan calculation',
+                settings=snapshot.get('settings',{}),metadata=snapshot.get('metadata',{}),
+                scenario_metadata=snapshot.get('scenario_metadata',{}),result=run_summary(result)))
+        return dict(runs=runs,next_cursor=rows[limit-1]['id'] if len(rows)>limit else None)
 
     def members(self, user):
         with self.connect() as db:

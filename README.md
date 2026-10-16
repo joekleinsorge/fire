@@ -16,19 +16,21 @@ For Docker, run `docker compose up --build` and open the same URL. The Compose v
 
 ## Workspace capabilities
 
-- Six-input quick FI estimate with linked income, expense, savings, monthly-savings, and savings-rate edits, plus a savings-rate chart and annual table. The estimate can expand into a detailed plan.
+- One connected household plan: accounts, property and other assets, debts, recurring cash flows, and retirement assumptions all feed the same projection.
 - Overview with net worth, spendable-asset progress, retirement spending target, projected FI timing, cash flow health, an asset projection, and annual details.
-- Editable cash, investment, retirement, property, and other assets; withdrawal order; and amortizing debts.
+- Editable cash, investment, and retirement accounts with withdrawal order; separately listed property and other assets; and amortizing debts.
 - Recurring after-tax income and expense schedules with cadence, start/end months, real growth, essential status, and pause controls.
 - Retirement assumptions and seeded simulations with annual percentile bands and separate essential-spending, desired-lifestyle, and portfolio-survival outcomes.
 - Saved plans with revisions, scenarios, comparisons, progress observations, and JSON import/export. CSV export and browser printing are also available.
 - Child profiles with separate 529 education and Trump Account forecasts; child assets stay outside a parent's spendable balance and FI target, while household-funded contributions reduce household cash flow.
 - Future purchases (a pool, a new home, tuition) with one-time cost, ongoing or time-limited upkeep, optional financing, a resulting property asset, and sale of an existing home with mortgage payoff, plus purchase scenarios that save a full plan copy with its baseline for side-by-side comparison.
 - Local accounts, household isolation, and role-based plan access.
+- Local HTTP API with bearer authentication, versioned partial updates, arbitrary plan metadata, and a Python CLI for Claude, Codex, and scripts. See [local API usage](docs/local-api.md).
+- ChatGPT/Codex MCP tools for sourced balance updates, durable scenario creation, real engine runs, and saved calculation history. See [conversational planning](docs/assistant-planning.md).
 
 ## Model boundaries
 
-Amounts are modeled in constant purchasing power. Stream amounts are entered after tax. Account returns and fees are user assumptions; fixed-return projections and simulation distributions are not forecasts. Property and other assets use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt. Debt interest is approximated monthly from its annual rate. Currency formatting follows the selected plan currency; the app does not convert between currencies.
+Amounts are modeled in constant purchasing power. Stream amounts are entered after tax. Account returns and fees are user assumptions; fixed-return projections and simulation distributions are not forecasts. Property and other assets use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt. Debt interest is approximated monthly from its annual rate. Currency formatting follows the selected plan currency; the app does not convert between currencies.
 
 The application does not calculate statutory taxes, Social Security or other benefit eligibility, healthcare programs, account-specific tax/access rules, mortality, or jurisdiction-specific estate outcomes. Child account forecasts are simplified year-end estimates: 529 qualified-use/state rules and Trump Account eligibility, taxes, and post-18 treatment are not determined. Entering a benefit or healthcare amount manually does not mean the app has verified it. See [implementation status](docs/implementation-status.md) for release limits and [local operations](docs/local-operations.md) for backup and deployment boundaries.
 

@@ -110,6 +110,24 @@ class FullEngineTests(unittest.TestCase):
                 self.assertAlmostEqual(actual['unfunded'],expected['unfunded'],places=7)
         self.assertEqual(sampled['annual_bands'][0]['p10'],sampled['annual_bands'][0]['p90'])
 
+    def test_personal_assets_cannot_fund_spending_but_legacy_financial_holdings_can(self):
+        plan = self.plan(horizon=1,accounts=[
+            dict(id='home',type='property',balance=1000,available=True,return_rate=0),
+            dict(id='car',type='other',balance=100,available=True,return_rate=0),
+            dict(id='hsa',type='other',balance=50,available=True,return_rate=0,
+                 source_details={'type':'health_savings'})],
+            streams=[dict(kind='expense',amount=80,end_month=2)])
+        result=project(plan)
+        self.assertEqual(result['monthly'][0]['unfunded'],30)
+        self.assertEqual(result['monthly'][0]['available_balance'],0)
+        self.assertEqual(result['monthly'][0]['net_worth'],1100)
+        simulated=simulate(plan,dict(trials=1,volatility=0))
+        self.assertEqual(simulated['paths'][0]['annual'][0]['unfunded'],30)
+
+    def test_personal_asset_availability_is_still_validated(self):
+        with self.assertRaisesRegex(ValueError,'available must be a boolean'):
+            project(self.plan(accounts=[dict(type='property',balance=10,available='yes')]))
+
     def test_full_simulation_uses_stream_essential_classification(self):
         plan = self.plan(streams=[dict(kind='expense', amount=50_000, essential=True)])
         result = simulate(plan, dict(trials=1, volatility=0))
@@ -123,6 +141,14 @@ class FullEngineTests(unittest.TestCase):
             project(plan)
         with self.assertRaisesRegex(ValueError, 'requires at least one account'):
             simulate(plan, dict(trials=1))
+
+    def test_explicit_empty_accounts_start_at_zero_without_quick_defaults(self):
+        blank=project(self.plan(accounts=[],streams=[]))
+        self.assertEqual(blank['summary']['initial_assets'],0)
+        self.assertEqual(blank['summary']['ending_assets'],0)
+        self.assertEqual(blank['annual'][0]['income'],0)
+        accumulated=project(self.plan(accounts=[],streams=[dict(kind='income',amount=25)]))
+        self.assertEqual(accumulated['annual'][0]['available_balance'],300)
 
     def test_retirement_does_not_truncate_explicit_streams(self):
         plan = self.plan(streams=[dict(kind='income',amount=100,end_month=13),
@@ -233,6 +259,17 @@ class FuturePurchaseTests(unittest.TestCase):
         pool = project(dict(plan, future_purchases=[dict(id='pool', name='Pool', amount=48000, month=12)]))
         self.assertEqual(pool['earliest_fi_age'], 38)
         self.assertEqual(pool['fi_age'], baseline['fi_age'])
+
+    def test_underfunded_property_never_adds_unpaid_value(self):
+        for loan in (0, 50000):
+            with self.subTest(loan=loan):
+                result = project(self.plan(future_purchases=[dict(id='home', name='Home',
+                    amount=300000, month=1, adds_asset=True, loan_amount=loan)]))
+                row = result['monthly'][0]
+                self.assertAlmostEqual(row['purchase_asset_added'], 199000 + loan)
+                self.assertAlmostEqual(row['purchase_asset_added'] + row['purchase_unfunded'], 300000)
+                self.assertAlmostEqual(row['net_worth'], 199000)
+
 
     def test_financed_home_creates_asset_and_loan(self):
         home = dict(id='home', name='Home', amount=400000, month=6, loan_amount=320000,

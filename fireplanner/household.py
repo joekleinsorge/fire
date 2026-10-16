@@ -30,10 +30,10 @@ def import_household(source):
         'Contributions, taxes, healthcare, Social Security, and retirement debt payoff are not fully modeled. See the source profile.',
         'Zero real returns on cash, property, and other restricted assets are placeholders, not verified assumptions.',
     ]
-    mapping = {'retirement': 'retirement', 'health_savings': 'other',
+    mapping = {'retirement': 'retirement', 'health_savings': 'investment',
                'taxable_investment': 'investment', 'cash': 'cash',
-               'employer_equity': 'other', 'property': 'property',
-               'vehicle': 'other', 'education_restricted': 'other'}
+               'employer_equity': 'investment', 'property': 'property',
+               'vehicle': 'other', 'education_restricted': 'investment'}
     accounts = []
     for index, row in enumerate(data['accounts']):
         kind = mapping[row['type']]
@@ -42,7 +42,7 @@ def import_household(source):
             bounds = row['estimated_value_range_usd']
             balance = (bounds['low'] + bounds['high']) / 2
         accounts.append(dict(id=f'import-account-{index}', name=row['name'], type=kind,
-                             balance=balance, return_rate=rate if kind in ('investment', 'retirement') else 0,
+                             balance=balance, return_rate=rate if row['type'] in ('taxable_investment', 'retirement') else 0,
                              fee_rate=0, available=row['type'] in ('cash', 'taxable_investment'),
                              source_details=deepcopy(row)))
     # Cash receives modeled surplus; preserve all source holdings separately.

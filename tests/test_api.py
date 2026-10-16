@@ -162,6 +162,102 @@ class APITest(unittest.TestCase):
         self.assertEqual((status,reply['user']),(200,None))
         self.assertEqual(self.request('GET','/api/plans',cookie=cookie)[0],401)
 
+    def test_bearer_session_metadata_merge_conflict_and_revocation(self):
+        self.register('api-client@example.com')
+        status, session, cookie = self.request('POST', '/api/auth/token',
+            {'email':'api-client@example.com','password':'correct horse battery'})
+        self.assertEqual(status, 200)
+        self.assertIsNone(cookie)
+        self.assertEqual(session['expires_in'], 86400)
+        headers = {'Authorization':'Bearer '+session['access_token']}
+        inputs = dict(age=40,horizon=2,accounts=[dict(id='cash',type='cash',balance=10)],
+            streams=[],debts=[],metadata={'notes':'Original','sources':{'bank':'Statement'}},
+            household_source={'original':'Keep this'},unresolved_inputs={'healthcare':None})
+        _, saved, _ = self.request('POST','/api/plans',{'name':'API plan','plan':inputs},extra_headers=headers)
+        route = '/api/plans/'+saved['id']
+        patch = {'version':1,'changes':{'metadata':{'notes':'Reviewed','sources':{'as_of':'2026-09-30'}}}}
+        status, updated, _ = self.request('PATCH',route,patch,extra_headers=headers)
+        self.assertEqual(status,200)
+        self.assertEqual(updated['version'],2)
+        self.assertEqual(updated['plan']['metadata'],{'notes':'Reviewed','sources':{'bank':'Statement','as_of':'2026-09-30'}})
+        self.assertEqual(updated['plan']['accounts'],inputs['accounts'])
+        self.assertEqual(updated['plan']['household_source'],inputs['household_source'])
+        self.assertEqual(updated['plan']['unresolved_inputs'],inputs['unresolved_inputs'])
+        self.assertEqual(self.request('PATCH',route,patch,extra_headers=headers)[0],409)
+        self.assertEqual(self.request('PATCH',route,{'version':2,'changes':{'age':-1}},extra_headers=headers)[0],400)
+        self.assertEqual(self.request('PATCH',route,{'version':2,'changes':{'metadata':[]}},extra_headers=headers)[0],400)
+        _, revisions, _ = self.request('GET',route+'/revisions',extra_headers=headers)
+        self.assertEqual([r['version'] for r in revisions['revisions']],[1,2])
+        self.assertEqual(revisions['revisions'][0]['plan'],inputs)
+        self.assertEqual(self.request('PATCH',route,{'version':2,'changes':{}},origin='https://attacker.test',extra_headers=headers)[0],403)
+        self.assertEqual(self.request('POST','/api/auth/logout',{},extra_headers=headers)[0],200)
+        self.assertEqual(self.request('GET',route,extra_headers=headers)[0],401)
+
+    def test_openapi_discovery_is_served_without_sign_in(self):
+        status, schema, _ = self.request('GET','/openapi.json')
+        self.assertEqual(status,200)
+        self.assertEqual(schema['openapi'],'3.1.0')
+        self.assertIn('patch',schema['paths']['/api/plans/{id}'])
+        self.assertIn('/api/auth/token',schema['paths'])
+
+    def test_patch_enforces_roles_households_and_preserves_array_semantics(self):
+        owner, cookie = self.register('patch-owner@example.com')
+        _, outsider = self.register('patch-outsider@example.com')
+        _, saved, _ = self.request('POST','/api/plans',{'plan':{'age':40,'metadata':{'a':1,'b':2}}},cookie)
+        route = '/api/plans/'+saved['id']
+        patch = {'version':1,'changes':{'metadata':{'a':None}}}
+        self.assertEqual(self.request('PATCH',route,patch,outsider)[0],404)
+        with self.server.store.connect() as db:
+            db.execute("UPDATE users SET role='viewer' WHERE id=?",(owner['id'],))
+        self.assertEqual(self.request('PATCH',route,patch,cookie)[0],403)
+        with self.server.store.connect() as db:
+            db.execute("UPDATE users SET role='editor' WHERE id=?",(owner['id'],))
+        status, updated, _ = self.request('PATCH',route,patch,cookie)
+        self.assertEqual(status,200)
+        self.assertEqual(updated['plan']['metadata'],{'b':2})
+        replacement=[dict(id='replacement',type='cash',balance=20)]
+        status, updated, _ = self.request('PATCH',route,{'version':2,'changes':{'accounts':replacement,'streams':[],'debts':[]}},cookie)
+        self.assertEqual(status,200)
+        self.assertEqual(updated['plan']['accounts'],replacement)
+
+    def test_command_line_client_login_patch_project_and_logout(self):
+        import contextlib
+        import io
+        import sys
+        from fireplanner.client import main
+        self.register('cli@example.com')
+        session_file=Path(self.tmp.name)/'private'/'session.json'
+        url='http://%s:%d' % self.server.server_address
+        common=['openfi','--url',url,'--session-file',str(session_file)]
+
+        def command(*args, stdin=None):
+            output=io.StringIO()
+            with patch.object(sys,'argv',common+list(args)), contextlib.redirect_stdout(output), patch.object(sys,'stdin',io.StringIO(stdin or '')):
+                main()
+            return json.loads(output.getvalue())
+
+        with patch('getpass.getpass',return_value='correct horse battery'):
+            reply=command('login','--email','cli@example.com')
+        self.assertEqual(reply,{'signed_in':True,'expires_in':86400})
+        self.assertEqual(session_file.stat().st_mode & 0o777,0o600)
+        created=command('create','-',stdin=json.dumps({'name':'CLI plan','age':40,'horizon':1,'accounts':[],'streams':[],'debts':[]}))
+        ident=created['id']
+        self.assertEqual(command('plans'),[{'id':ident,'name':'CLI plan','version':1}])
+        updated=command('patch',ident,'-',stdin=json.dumps({'version':1,'changes':{'metadata':{'notes':'CLI updated'}}}))
+        self.assertEqual(updated['version'],2)
+        self.assertEqual(command('get',ident)['plan']['metadata']['notes'],'CLI updated')
+        self.assertEqual(len(command('preview',ident)['annual']),1)
+        logged=command('project',ident)
+        self.assertEqual(logged['status'],'queued')
+        self.assertEqual(command('runs',ident)['runs'][0]['id'],logged['id'])
+        self.assertEqual(command('job',logged['id'])['snapshot']['plan_version'],2)
+        self.assertTrue(command('logout')['ok'])
+        self.assertFalse(session_file.exists())
+        credentials=Path(self.tmp.name)/'login.json'
+        credentials.write_text(json.dumps({'email':'cli@example.com','password':'correct horse battery'}))
+        self.assertEqual(command('login','--credentials-file',str(credentials))['signed_in'],True)
+        self.assertTrue(command('logout')['ok'])
+
     def test_scenario_records_validate_name_and_plan(self):
         _,cookie=self.register('scenario-records@example.com')
         _,plan,_=self.request('POST','/api/plans',{'plan':{'horizon':2}},cookie)

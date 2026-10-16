@@ -8,7 +8,7 @@ The browser workspace covers a six-input quick FI calculator with linked savings
 
 The Python standard-library server uses SQLite for transactional persistence and a durable local job queue. It runs as a single server/worker process. Household isolation and plan roles are enforced at the API. This is a deliberate initial deployment choice instead of the target PostgreSQL/distributed-worker topology.
 
-The monthly engine models real-dollar balances, scheduled after-tax streams, account-specific real returns and fees, availability and withdrawal order, debt payments, essential and desired spending outcomes, and FI target timing based on modeled retirement cash flows. Seeded simulation produces outcome denominators and annual percentile bands. Property and other assets count toward net worth but are unavailable for spending by default, with fixed assumed returns and no automatic sale or linked debt.
+The monthly engine models real-dollar balances, scheduled after-tax streams, account-specific real returns and fees, availability and withdrawal order, debt payments, essential and desired spending outcomes, and FI target timing based on modeled retirement cash flows. Seeded simulation produces outcome denominators and annual percentile bands. Personal property and other personal assets count toward net worth but cannot fund spending, with fixed assumed returns and no automatic sale or linked debt. Restricted financial holdings remain separate from personal property. The full-plan workflow accepts an explicitly empty account list while entering initial assumptions.
 
 ## Boundaries
 

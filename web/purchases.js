@@ -24,14 +24,14 @@ function openPurchase(mode,id){
 }
 function updatePurchaseTiming(){const p=purchaseBase||plan,offset=monthToOffset($('purchase-month').value,p);$('purchase-timing').textContent=Number.isFinite(offset)&&offset>=1?`${offset} month${offset===1?'':'s'} after your ${p.valuation_date} baseline`:`Choose a month after your ${p.valuation_date} baseline`}
 $('purchase-month').oninput=updatePurchaseTiming;
-$('add-purchase').onclick=()=>openPurchase('current');$('fork-purchase').onclick=()=>openPurchase('fork');
+$('add-purchase').onclick=()=>openPurchase('current');$('fork-purchase').onclick=()=>user?openPurchase('fork'):openAuth();
 $('purchase-close').onclick=$('purchase-cancel').onclick=()=>$('purchase-dialog').close();
 function purchaseMetrics(p,r){const short=r.summary?.first_shortfall_age;return [r.earliest_fi_age,r.fi_age??(r.years_to_target==null?null:Number(p.age)+r.years_to_target),short==null?null:Math.floor(short),r.target,r.summary?.retirement_available_balance,r.summary?.ending_assets,r.summary?.ending_net_worth,r.summary?.total_unfunded]}
 function purchaseComparisonHTML(left,right,results,leftName,rightName){
   const currency=p=>p.currency||'USD',format=(n,p)=>n==null?'—':new Intl.NumberFormat(undefined,{style:'currency',currency:currency(p),maximumFractionDigits:0}).format(n),values=[purchaseMetrics(left,results[0]),purchaseMetrics(right,results[1])];
   const labels=['Age assets first reach FI target','FI age (at or after planned retirement)','Age money first runs short','FI target','Spendable assets at planned retirement','End-of-plan assets','End-of-plan net worth','Total unfunded spending'];
   const compatible=currency(left)===currency(right)&&(results[0].metadata?.price_basis===results[1].metadata?.price_basis);
-  return `<div class="table-scroll"><table class="purchase-comparison"><thead><tr><th>Outcome</th><th>${esc(leftName)}</th><th>${esc(rightName)}</th><th>Change</th></tr></thead><tbody>${labels.map((label,i)=>{const a=values[0][i],b=values[1][i],age=i<3,cell=(v,p)=>age?v==null?(i===2?'Never':'Not reached'):String(v):format(v,p),delta=a==null||b==null||!compatible?'—':age?(b===a?'No change':`${b-a>0?'+':''}${b-a} year${Math.abs(b-a)===1?'':'s'}`):`${b-a>0?'+':''}${format(b-a,right)}`;return `<tr><th>${label}</th><td>${cell(a,left)}</td><td>${cell(b,right)}</td><td>${delta}</td></tr>`}).join('')}</tbody></table></div><p class="small-note">Planned retirement ages: ${left.age==null?'—':left.retirement_age} / ${right.retirement_age}. A one-time purchase reduces assets; ongoing upkeep can also increase your FI target. “Age assets first reach FI target” is the first modeled year-end with spendable assets at the target, even before your planned retirement. FI age is the first such year-end at or after planned retirement; neither is an optimized retirement date.</p>`;
+  return `<div class="table-scroll"><table class="purchase-comparison"><thead><tr><th>Outcome</th><th>${esc(leftName)}</th><th>${esc(rightName)}</th><th>Change</th></tr></thead><tbody>${labels.map((label,i)=>{const a=values[0][i],b=values[1][i],age=i<3,cell=(v,p)=>age?v==null?(i===2?'None in modeled years':'Not reached'):String(v):format(v,p),delta=a==null||b==null||!compatible?'—':age?(b===a?'No change':`${b-a>0?'+':''}${b-a} year${Math.abs(b-a)===1?'':'s'}`):`${b-a>0?'+':''}${format(b-a,right)}`;return `<tr><th>${label}</th><td>${cell(a,left)}</td><td>${cell(b,right)}</td><td>${delta}</td></tr>`}).join('')}</tbody></table></div><p class="small-note">Planned retirement ages: ${left.age==null?'—':left.retirement_age} / ${right.retirement_age}. “Age assets first reach FI target” is the first modeled year-end with spendable assets at the target, even before your planned retirement. FI age is the first such year-end at or after planned retirement; neither is an optimized retirement date.</p>`;
 }
 async function comparePurchaseScenario(s,precomputed){
   const data=s.data||s,left=structuredClone(data.baseline_plan||plan),right=structuredClone(data.plan),results=precomputed||await Promise.all([projectPlan(left),projectPlan(right)]);
@@ -47,7 +47,8 @@ async function acceptPurchasePlan(candidate,startingFingerprint){
   $('save-state').textContent='Unsaved changes · projection current';$('save-state').classList.add('dirty');
 }
 function readPurchaseRow(forPreview=false){
-  const row={id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
+  const original=structuredClone((purchaseBase.future_purchases||[]).find(p=>p.id===purchaseEditId)||{});for(const key of ['upkeep_years','loan_amount','loan_rate','loan_months','sell_account_id','sell_cost_rate','payoff_debt_id','adds_asset','asset_return'])delete original[key];
+  const row={...original,id:purchaseEditId||uid(),name:$('purchase-name').value.trim(),amount:Number($('purchase-amount').value),month:monthToOffset($('purchase-month').value,purchaseBase),annual_upkeep:Number($('purchase-upkeep').value),enabled:$('purchase-enabled').checked};
   const years=$('purchase-upkeep-years').value.trim(),loan=Number($('purchase-loan').value||0);
   if(years)row.upkeep_years=Number(years);
   if(loan){row.loan_amount=loan;row.loan_rate=Number($('purchase-loan-rate').value)/100;row.loan_months=Number($('purchase-loan-years').value)*12}
@@ -89,12 +90,11 @@ $('purchase-form').onsubmit=async e=>{
     const candidate=purchaseCandidate(readPurchaseRow());
     if(purchaseMode==='fork'){
       const name=$('purchase-scenario-name').value.trim();if(!name)throw Error('Enter a scenario name.');candidate.name=name;
-      const results=await Promise.all([projectPlan(purchaseBase),projectPlan(candidate)]);
       if(JSON.stringify(plan)!==purchaseBaseFingerprint)throw Error('Your working plan changed during calculation. Reopen the purchase dialog to use the updated baseline.');
       const data={name,plan:candidate,baseline_plan:structuredClone(purchaseBase)};
-      if(user){if(!saved&&!(await savePlan()))throw Error('Save the baseline plan to create a persistent scenario.');await api(`/api/plans/${saved.id}/scenarios`,data);await refreshScenarios()}else{scenarios.push({id:uid(),...data});renderScenarios()}
-      $('purchase-dialog').close();go('scenarios');await comparePurchaseScenario(data,results);
-      tell(user?'Purchase scenario saved with its starting baseline.':'Purchase scenario saved for this tab only. Sign in to save persistently.');
+      if(!user)throw Error('Sign in to save a durable scenario.');if(!(await savePlan())||workingDirty)throw Error('Save the baseline plan to create a persistent scenario.');const reply=await api(`/api/plans/${saved.id}/scenarios`,{...data,base_version:saved.version,metadata:{origin:'purchase scenario'}});await refreshScenarios();await startScenarioRun(reply.scenario.id);
+      $('purchase-dialog').close();go('scenarios');
+      tell('Purchase scenario saved with its baseline; a durable comparison run is queued.');
     }else{await acceptPurchasePlan(candidate,purchaseBaseFingerprint);$('purchase-dialog').close();tell('Future purchase applied and every forecast recalculated.')}
   }catch(err){tell(err.message,true)}finally{button.disabled=false}
 };

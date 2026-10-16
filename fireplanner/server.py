@@ -35,6 +35,8 @@ class Worker:
                 from . import engine
                 payload = json.loads(row['payload'])
                 result = engine.project(payload['plan']) if row['kind']=='project' else engine.simulate(payload['plan'],payload['settings'])
+                if row['kind']=='project' and payload.get('baseline_plan') is not None:
+                    result['baseline_projection'] = engine.project(payload['baseline_plan'])
                 encoded = json.dumps(result,allow_nan=False)
                 with self.store.connect() as db:
                     db.execute("UPDATE jobs SET status='completed',result=?,error=NULL WHERE id=? AND status='running'",(encoded,row['id']))
@@ -56,7 +58,7 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
             pass  # Do not retain URLs, user identifiers, or financial inputs in logs.
 
         def send(self, status, value, content_type='application/json', cookie=None):
-            body = json.dumps(value,allow_nan=False).encode() if content_type=='application/json' else value
+            body = value if isinstance(value, bytes) else json.dumps(value,allow_nan=False).encode()
             self.send_response(status)
             self.send_header('Content-Type',content_type)
             self.send_header('Content-Length',str(len(body)))
@@ -70,6 +72,10 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
             self.wfile.write(body)
 
         def token(self):
+            authorization = self.headers.get('Authorization', '')
+            if authorization:
+                scheme, _, credential = authorization.partition(' ')
+                return credential.strip() if scheme.lower() == 'bearer' else ''
             cookie = SimpleCookie()
             try:
                 cookie.load(self.headers.get('Cookie',''))
@@ -81,7 +87,7 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
             path = urlsplit(self.path).path
             parts = path.strip('/').split('/')
             data = {}
-            if self.command in ('POST','PUT','DELETE'):
+            if self.command in ('POST','PUT','PATCH','DELETE'):
                 origin = self.headers.get('Origin')
                 host_header = self.headers.get('Host','')
                 if origin and origin not in ('http://'+host_header,'https://'+host_header):
@@ -112,10 +118,12 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
             if path == '/api/capabilities' and self.command=='GET':
                 from .planning import capabilities
                 return self.send(200,capabilities())
-            if path in ('/api/auth/register','/api/auth/login') and self.command=='POST':
+            if path in ('/api/auth/register','/api/auth/login','/api/auth/token') and self.command=='POST':
                 method = store.register if path.endswith('register') else store.login
                 user = method(str(data.get('email','')),str(data.get('password','')))
                 token = store.session(user)
+                if path == '/api/auth/token':
+                    return self.send(200,{'user':user,'access_token':token,'token_type':'Bearer','expires_in':86400})
                 return self.send(200,{'user':user},cookie='session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400')
             if not path.startswith('/api/'):
                 if self.command != 'GET':
@@ -162,6 +170,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                         return self.send(200,store.plan(user,ident))
                     if self.command=='PUT':
                         return self.send(200,store.save(user,data,ident))
+                    if self.command=='PATCH':
+                        return self.send(200,store.patch_plan(user,ident,data))
                     if self.command=='DELETE':
                         return self.send(200,{'deleted':store.delete_plan(user,ident)})
                 if len(parts)==4:
@@ -192,6 +202,9 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                             'comparison':{'basis':'age','annual':annual}})
                     if action=='run' and self.command=='POST':
                         return self.send(202,{'job':store.enqueue(user,ident,data)})
+                    if action=='runs' and self.command=='GET':
+                        query=parse_qs(urlsplit(self.path).query)
+                        return self.send(200,store.runs(user,ident,int(query.get('limit',['50'])[0]),query.get('before',[None])[0]))
                     if action in ('scenarios','observations','revisions'):
                         if action=='revisions' and self.command=='GET':
                             store.plan(user,ident)
@@ -199,6 +212,8 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                                 rows=db.execute('SELECT version,plan,created FROM revisions WHERE plan_id=? ORDER BY version',(ident,)).fetchall()
                             return self.send(200,{'revisions':[dict(version=r['version'],plan=json.loads(r['plan']),created=r['created']) for r in rows]})
                         if action!='revisions' and self.command in ('GET','POST'):
+                            if action=='scenarios' and self.command=='POST':
+                                return self.send(200,store.records(user,ident,action,data,return_created=True))
                             return self.send(200,{action:store.records(user,ident,action,data if self.command=='POST' else None)})
                     if action=='export' and self.command=='GET':
                         plan=store.plan(user,ident)
@@ -222,6 +237,10 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                         return self.send(200,plan)
                 if len(parts)==5 and parts[3] in ('observations','scenarios') and self.command=='DELETE':
                     return self.send(200,{'deleted':store.delete_record(user,ident,parts[3],parts[4])})
+                if len(parts)==5 and parts[3]=='scenarios' and self.command=='GET':
+                    return self.send(200,{'scenario':store.scenario(user,ident,parts[4])})
+                if len(parts)==6 and parts[3]=='scenarios' and parts[5]=='run' and self.command=='POST':
+                    return self.send(202,{'job':store.enqueue(user,ident,data,scenario_id=parts[4])})
             if len(parts) in (3,4) and parts[:2]==['api','jobs']:
                 if self.command=='GET' and len(parts)==3:
                     return self.send(200,{'job':store.job(user,parts[2])})
@@ -246,6 +265,7 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
         do_GET=handle_request
         do_POST=handle_request
         do_PUT=handle_request
+        do_PATCH=handle_request
         do_DELETE=handle_request
 
     server=ThreadingHTTPServer((host,port),Handler)

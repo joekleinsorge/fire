@@ -8,7 +8,16 @@ from datetime import date
 import re
 from . import children as child_planning
 
-VERSION = '2.0.0'
+VERSION = '2.1.1'
+
+
+def is_personal_asset(account):
+    """Recognize older imports that stored restricted financial holdings as other."""
+    source = account.get('source_details')
+    source_type = source.get('type') if isinstance(source, dict) else None
+    return account.get('type') == 'property' or (
+        account.get('type') == 'other' and source_type not in
+        ('health_savings', 'employer_equity', 'education_restricted'))
 
 
 def number(value, name, minimum=None, maximum=None, integer=False):
@@ -204,7 +213,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     for rows, name, cap in ((accounts, 'accounts', 100), (streams, 'streams', 500), (debts, 'debts', 100)):
         if not isinstance(rows, list) or len(rows) > cap or any(not isinstance(row, dict) for row in rows):
             raise ValueError(f'{name} must be a bounded list of objects')
-    if not accounts:
+    if not accounts and 'accounts' not in plan:
         raise ValueError('full mode requires at least one account')
     def flag(row, key, default):
         value = row.get(key, default)
@@ -215,7 +224,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     initial = sum(balances)
     account_rates = [number(a.get('return_rate', p['return_rate']), 'account return', -.999999999, 10) for a in accounts]
     fees = [number(a.get('fee_rate', 0), 'fee_rate', 0, .99) for a in accounts]
-    accessible = [flag(a, 'available', a.get('type', 'investment') not in ('property', 'other')) for a in accounts]
+    accessible = [flag(a, 'available', not is_personal_asset(a)) and not is_personal_asset(a) for a in accounts]
     for a in accounts:
         if a.get('type', 'investment') not in ('cash', 'investment', 'retirement', 'property', 'other'):
             raise ValueError('unsupported account type')
@@ -265,7 +274,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             item[key + '_index'] = matches[0]
     resolve(accounts, 'sell_account_id', 'account')
     resolve(debts, 'payoff_debt_id', 'debt')
-    purchase_assets = [dict(month=item['month'], value=0.0, rate=item['asset_return'], amount=item['amount'])
+    purchase_assets = [dict(id=item['id'], month=item['month'], value=0.0, rate=item['asset_return'], amount=item['amount'])
                        for item in purchases if item['enabled'] and item['adds_asset']]
     # Income is available immediately; withdrawals follow the user's account order.
     available_indices = [i for i, available in enumerate(accessible) if available]
@@ -399,11 +408,20 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         purchase_due = sum(item['amount'] - item['loan_amount'] for item in purchases if item['enabled'] and item['month'] == month)
         upkeep = sum(item['annual_upkeep'] / 12 for item in purchases if _upkeep_active(item, month))
         purchase_paid, purchase_unfunded = pay(purchase_due + upkeep)
+        # Allocate funded purchase cash in input order, before upkeep. Missing
+        # cash is an explicit shortfall, never a free addition to net worth.
+        funded_cash = min(purchase_paid, purchase_due)
+        funded_values = {}
+        for item in purchases:
+            if item['enabled'] and item['month'] == month:
+                paid = min(funded_cash, item['amount'] - item['loan_amount'])
+                funded_cash -= paid
+                funded_values[item['id']] = paid + item['loan_amount']
         purchase_asset_added = 0.0
         for asset in purchase_assets:
             if asset['month'] == month:
-                asset['value'] = asset['amount']
-                purchase_asset_added += asset['amount']
+                asset['value'] = funded_values[asset['id']]
+                purchase_asset_added += asset['value']
         for debt in debt_rows:
             if debt['origin'] and debt['origin'] == month:
                 debt['balance'] = debt['principal']
@@ -486,8 +504,9 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         essential_spending_funded=retirement_essential if has_window else None,
         desired_lifestyle_funded=retirement_desired if has_window else None,
         metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Unavailable accounts cannot fund spending.',
+            'Underfunded purchases add only funded cost to asset value; a partial value does not mean a purchase can close.',
             'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
-            'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.'])
+            'Property and other asset values use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt.'])
 
 
 def _percentile(values, p):
