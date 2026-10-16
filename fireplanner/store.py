@@ -54,6 +54,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,plan_id TEXT NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,household TEXT NOT NULL,plan_id TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,error TEXT,attempts INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS job_summaries(run_id TEXT PRIMARY KEY,data TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status,created);
+            CREATE INDEX IF NOT EXISTS jobs_history ON jobs(plan_id,household,created DESC,id DESC);
+            CREATE INDEX IF NOT EXISTS jobs_latest ON jobs(plan_id,household,json_extract(payload,'$.scenario_id'),kind,created DESC,id DESC) WHERE status='completed';
             ''')
             # A process restart returns interrupted work to the durable queue.
             db.execute("UPDATE jobs SET status='failed',error='Interrupted after maximum attempts' WHERE status='running' AND attempts>=3")
