@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Open FI local planning API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "The browser and API share saved plans, permissions, calculations, and immutable revisions. Bearer sessions expire after 24 hours. Metadata is preserved but does not affect financial arithmetic."
   },
   "servers": [
@@ -1610,6 +1610,91 @@
           }
         },
         "parameters": []
+      }
+    },
+    "/api/plans/{id}/complete-inputs": {
+      "post": {
+        "summary": "Apply confirmed source facts or chosen budgets as a new revision and log a durable calculation",
+        "operationId": "completeInputs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "section",
+                  "values",
+                  "source",
+                  "as_of",
+                  "confirmed"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  },
+                  "section": {
+                    "type": "string",
+                    "enum": [
+                      "household",
+                      "payroll",
+                      "mortgage",
+                      "balance",
+                      "children",
+                      "education",
+                      "healthcare",
+                      "insurance",
+                      "benefits",
+                      "tax_basis",
+                      "investments",
+                      "employer_equity",
+                      "second_home",
+                      "project_quotes"
+                    ]
+                  },
+                  "values": {
+                    "type": "object"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "as_of": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "confirmed": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved plan envelope and queued durable job; second-home/project entries create independent scenarios"
+          },
+          "400": {
+            "description": "Incomplete or invalid source facts/budget"
+          },
+          "403": {
+            "description": "Read-only household role"
+          },
+          "409": {
+            "description": "Saved plan version changed"
+          }
+        }
       }
     }
   },

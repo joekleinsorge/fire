@@ -19,3 +19,8 @@ class WebAssetTests(unittest.TestCase):
             paths.append(match.group(1))
         self.assertIn('/planning.js',paths)
         self.assertLess(paths.index('/purchases.js'),paths.index('/planning.js'))
+
+    def test_completion_loads_after_planning(self):
+        page=(Path(engine.__file__).resolve().parents[1]/'web'/'index.html').read_text()
+        self.assertIn('/completion.js',page)
+        self.assertLess(page.index('/planning.js'),page.index('/completion.js'))

@@ -2,7 +2,7 @@
 import math
 from .engine import quick
 
-VERSION = 'planning-1'
+VERSION = 'planning-2'
 
 def number(value, name, minimum=0, maximum=1e15):
     if isinstance(value, bool):
@@ -22,10 +22,17 @@ def integer(value, name, minimum, maximum):
     return int(result)
 
 def capabilities():
-    return {'version': VERSION, 'available': ['quick', 'fixed_projection', 'saved_revisions', 'scenarios', 'durable_run_history', 'scenario_snapshot_runs', 'mcp_stdio', 'parametric_simulation', 'user_data_resampling', 'debt', 'sensitivity', 'bounded_search', 'effective_tax_fallback', 'gross_estate_arithmetic', 'user_supplied_survival'], 'unavailable': {'statutory_taxes': 'No reviewed jurisdiction modules installed', 'social_security_estimation': 'No reviewed benefit rules installed; enter manual income', 'ACA_Medicare': 'No reviewed healthcare rules installed; enter manual expenses', 'named_withdrawal_methods': 'Exact source-reviewed variants not installed', 'licensed_historical_data': 'Supply your own annual total-return series', 'mortality_tables': 'Supply a reviewed survival series; none bundled', 'international_rules': 'No reviewed country modules installed'}}
+    return {'version': VERSION, 'available': ['quick', 'fixed_projection', 'saved_revisions', 'scenarios', 'durable_run_history', 'scenario_snapshot_runs', 'mcp_stdio', 'parametric_simulation', 'user_data_resampling', 'debt', 'sensitivity', 'bounded_search', 'effective_tax_fallback', 'gross_estate_arithmetic', 'user_supplied_survival', 'mfj_florida_2026_withdrawal_taxes', 'rmd_uniform_lifetime', 'source_labeled_intake', 'marketplace_2026_quote_arithmetic'], 'unavailable': {'full_statutory_taxes': 'Bounded2026 MFJ Florida standard-deduction module only; other jurisdictions,AMT,itemization and future law not installed', 'social_security_estimation': 'No reviewed benefit rules installed; enter manual income', 'full_ACA_Medicare': '2026 Marketplace quote arithmetic available; eligibility,Medicare IRMAA and future program changes require reviewed inputs', 'named_withdrawal_methods': 'Exact source-reviewed variants not installed', 'licensed_historical_data': 'Supply your own annual total-return series', 'mortality_tables': 'Supply a reviewed survival series; none bundled', 'international_rules': 'No reviewed country modules installed'}}
 
 def analyze(payload):
     kind = payload.get('kind')
+    if kind == 'healthcare':
+        from .healthcare import estimate
+        return {'kind':kind,**estimate(payload)}
+    if kind == 'federal_tax':
+        from .taxes import federal,SOURCES,VERSION as TAX_VERSION
+        if payload.get('jurisdiction')!='US-MFJ-FL-2026':raise ValueError('Supported jurisdiction is US-MFJ-FL-2026')
+        return {'kind':kind,'version':TAX_VERSION,'sources':SOURCES,**federal(**{key:payload[key] for key in ('ordinary','gains','social_security','exempt_interest','children') if key in payload})}
     if kind == 'debt':
         principal = number(payload.get('principal'), 'principal')
         rate = number(payload.get('annual_rate', 0), 'annual_rate', 0, 1) / 12

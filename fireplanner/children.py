@@ -91,6 +91,11 @@ def project(plan, horizon, initialize_only=False):
         members.append(dict(id=member_id, name=name,
                             relationship=_text(raw.get('relationship'), 'member relationship', 'child'),
                             birth_date=birth_date))
+    for member,raw in zip(members,raw_members):
+        for flag in ('us_citizen','valid_ssn_confirmed','pilot_processed','qualifying_child'):
+            v=raw.get(flag)
+            if v is not None and not isinstance(v,bool):raise ValueError(f'{flag} must be true,false or unknown')
+            member[flag]=v
     members_by_id = {row['id']: row for row in members}
 
     valuation_date = plan.get('valuation_date')
@@ -182,6 +187,12 @@ def project(plan, horizon, initialize_only=False):
                 raise ValueError('Trump Account contributions cannot continue after the beneficiary growth period ends')
             if pilot and pilot_year < start:
                 raise ValueError('pilot contribution year cannot be before the Trump Account start year')
+            if pilot:
+                child=members_by_id[beneficiary_id];birth_year=int(child['birth_date'][:4])
+                if not 2025<=birth_year<=2028:raise ValueError('Pilot deposit requires a beneficiary born2025–2028')
+                if raw.get('pilot_eligibility_confirmed') is not True:raise ValueError('Confirm all pilot eligibility and election conditions before modeling a deposit')
+                if any(child.get(k) is False for k in ('us_citizen','valid_ssn_confirmed','qualifying_child')) or child.get('pilot_processed') is True:
+                    raise ValueError('Entered child facts conflict with pilot eligibility or an already processed deposit')
             row.update(start_year=start, end_year=end, employer_contribution=employer,
                        pilot_contribution=pilot, pilot_year=pilot_year,
                        employer_contributor_id=employer_contributor_id,

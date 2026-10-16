@@ -342,12 +342,13 @@ class ChildPlanningTests(unittest.TestCase):
 
     def test_child_forecasts_are_separate_and_use_year_end_real_ledger(self):
         plan = self.base()
+        plan['members'].append(dict(id='newborn',name='Newborn',birth_date='2025-06-01'))
         plan['child_accounts'] = [
             dict(id='college', name='Education', type='529', beneficiary_id='kid-1',
                  balance=100, return_rate=.1, fee_rate=.01, annual_contribution=100,
                  start_year=2026, end_year=2026, education_annual_withdrawal=200,
                  education_start_age=16, education_years=2),
-            dict(id='future', name='Trump', type='trump', beneficiary_id='kid-1',
+            dict(id='future', name='Trump', type='trump', beneficiary_id='newborn',pilot_eligibility_confirmed=True,
                  balance=1000, return_rate=0, annual_contribution=1000,
                  employer_contribution=500, employer_contributor_id='adult-a',
                  start_year=2026, end_year=2027, pilot_contribution=1000, pilot_year=2026),
@@ -466,9 +467,10 @@ class ChildPlanningTests(unittest.TestCase):
 
     def test_pilot_receipt_is_single_and_excluded_from_general_cap(self):
         plan = self.base()
+        plan['members'][0]['birth_date']='2025-06-01'
         plan['assets'] = 10000
         plan['child_accounts'] = [dict(id='t1', name='One', type='trump', beneficiary_id='kid-1',
-                 annual_contribution=5000, pilot_contribution=1000, pilot_year=2026,
+                 annual_contribution=5000, pilot_contribution=1000, pilot_year=2026,pilot_eligibility_confirmed=True,
                  start_year=2026, end_year=2026)]
         result = project(plan)
         account = result['children']['child_accounts'][0]

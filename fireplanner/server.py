@@ -176,6 +176,21 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                         return self.send(200,{'deleted':store.delete_plan(user,ident)})
                 if len(parts)==4:
                     action=parts[3]
+                    if action=='complete-inputs' and self.command=='POST':
+                        from .intake import apply,second_home,quoted_project
+                        current=store.plan(user,ident)
+                        if data.get('version')!=current['version']:raise FileExistsError('Plan changed; reload before applying facts')
+                        candidate=apply(current['plan'],data)
+                        alternative=None
+                        if data.get('section') in ('second_home','project_quotes'):
+                            from .engine import project
+                            alternative=(second_home if data['section']=='second_home' else quoted_project)(candidate,data['values']);project(alternative)
+                        updated=store.save(user,{'version':current['version'],'name':current['name'],'plan':candidate},ident)
+                        if alternative is not None:
+                            row=store.records(user,ident,'scenarios',{'name':('Second home — '+data['values']['purchase_month'] if data['section']=='second_home' else data['values']['project'].title()+' — '+data['values']['target_month'])+' — supplied budget','base_version':updated['version'],'plan':alternative,'baseline_plan':candidate,'metadata':{'group':'Second home' if data['section']=='second_home' else 'Home projects','status':'illustrative','rationale':'Source-labeled supplied budget. Full purchase funding and liquid reserve required. This is an independent alternative; existing inputs and earlier results are preserved.','source':data['source'],'source_date':data['as_of']}},return_created=True)
+                            job=store.enqueue(user,ident,{'kind':'project'},row['scenario']['id'])
+                        else:job=store.enqueue(user,ident,{'kind':'project','version':updated['version'],'metadata':{'purpose':'Guided source-labeled input update'}})
+                        return self.send(200,{'plan':updated,'job':job})
                     if action=='fork' and self.command=='POST':
                         return self.send(201,store.fork(user,ident,data))
                     if action=='compare' and self.command=='POST':

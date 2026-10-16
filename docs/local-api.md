@@ -119,3 +119,55 @@ is sold. References must identify another purchase in the snapshot.
 scenario and calculation kind, independent of history pagination. It requires
 the same household access as the plan. Full immutable results remain available
 through each returned job ID.
+
+## Guided source facts
+
+`POST /api/plans/{id}/complete-inputs` requires `version`, `section`, `values`,
+`source`, an `as_of` date, and `confirmed:true`. It validates a complete candidate,
+preserves unknown/null source values and unrelated fields, saves a new revision,
+and enqueues a durable calculation. Section-specific required fields are
+defined in `fireplanner/intake.py` and presented by `web/completion.js`.
+Second-home and project quote submissions save independent scenario snapshots;
+the baseline records the source budget without buying the property/project.
+Child pool allocations must reconcile exactly and disable the parent pool's
+balance/deposits to prevent double counting. No bank credentials or SSNs are
+accepted by child planning. Read-only users cannot apply facts.
+
+## 2026 MFJ Florida tax model
+
+Set `tax_model.enabled:true` and `jurisdiction:US-MFJ-FL-2026`. Every account must
+explicitly declare `tax_treatment` (`cash`, `pretax`, `taxable`,
+`roth_qualified`, `restricted`, `property`). Taxable accounts require
+`cost_basis` and `gain_method:proportional_long_term`; an entered
+`short_term_gain_fraction` overrides the corresponding gain fraction.
+Basis is held nominally, deflated in the real-dollar ledger, reduced
+proportionally on sales, and increased by funded deposits and reinvested
+income. `qualified_dividend_yield` / `ordinary_income_yield` are included in
+total assumed return and taxed once; they are not extra investment returns.
+
+The reviewed rules cover ordinary brackets, standard/age65 deduction, LTCG
+stacking, nonrefundable CTC phaseout, taxable Social Security, NIIT, and
+primary-earner payroll taxes for explicit gross wage contexts. Indexed values
+are held in real dollars; non-indexed thresholds decline with inflation.
+`income_context` provides gross-adjusted income already represented in net
+streams. With `recalculate_wages:true`, wage contexts need `role`, `stream_id`,
+`gross_amount`, `amount` after pretax payroll saving, and month schedules.
+`net_adjustment_per_payment` retains explicitly entered other deductions.
+Gross `tax_kind:ordinary` / `social_security` income streams get a separate
+baseline annual tax allocation; withdrawals pay only incremental taxes.
+
+Pretax RMDs require owner birth year and `rmd_start_age`; Uniform Lifetime
+factors apply. The first modeled distribution year requires its prior
+December31 nominal balance unless the model already observed that December.
+RMD net proceeds remain available household cash and are internal transfers.
+Conversions specify month, amount, source/destination account IDs and optional
+minimum liquid reserve. They require separate liquid funding for the tax;
+blocked events do not transfer assets. Converted Roth money is not unlocked
+early. RMD-year conversion ordering is explicitly unsupported.
+
+Full results contain calendar-year `tax_analysis` and per-month accounting.
+This is a bounded current-law planning model, not future-law prediction or
+a return-preparation engine. AMT, itemization, QBI, loss carryovers, inherited
+IRA rules, exact lots, ACA eligibility, IRMAA, and survivor filing transitions
+remain outside this module. `/api/analyze` supports `federal_tax` and
+full-year `healthcare` reference arithmetic for2026.

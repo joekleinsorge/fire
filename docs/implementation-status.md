@@ -29,3 +29,15 @@ The app does not provide statutory federal/state/international taxes, Social Sec
 ## Verification
 
 Verification on 2026-10-12: all 54 Python unit/API tests pass, including engine coverage for household-funded child contributions, future purchases (financing, assets, sales, payoffs, limited upkeep), matured-debt shortfalls, and earliest FI age; JavaScript syntax validation, Python compilation, and `git diff --check` pass. Browser review exercised child creation, a 529 funding forecast, and a Trump Account contribution projection in an isolated, unsaved test session, and verified the current Trump Account form guidance, employer-contributor label, and account-fee input. A scripted headless-browser pass (2026-10-13) exercised every view, child and account creation, adding a purchase, a signed-out purchase scenario and observation, registration and first save, a persisted scenario, reload with plan restoration, comparison, and a 390px viewport without horizontal overflow or console errors. Earlier browser review covered anonymous calculation, local registration, saving/reopening, projection, simulation, scenario loading, and a narrow viewport without horizontal overflow. Formal accessibility conformance, production deployment, statutory validation, and performance benchmarks have not been completed.
+
+## October16 planning completion update
+
+The deployed household workflow now has source-labeled guided updates,
+conserving child-account mapping, purchase-linked rental income, strict pilot
+birth-year/attestation checks, progressive MFJ Florida tax/reference rules,
+nominal taxable basis with funded deposits, explicit dividend tax drag, RMDs,
+and funded Roth conversions. See `docs/local-api.md` for exact boundaries.
+Earlier statements above that no reviewed jurisdiction module exists describe
+the previous implementation. These additions do not establish future-law,
+provider data, full tax-return, Medicare/ACA eligibility, or survivor modeling.
+Personal facts remain unknown until sourced or deliberately entered as budgets.
