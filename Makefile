@@ -8,3 +8,4 @@ check: test
 	node --check web/app.js
 	node --check web/children.js
 	node --check web/purchases.js
+	node --check web/social-security.js
