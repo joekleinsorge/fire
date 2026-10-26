@@ -230,6 +230,27 @@ def _upkeep_active(item, month):
     return item['upkeep_years'] is None or month <= item['month'] + item['upkeep_years'] * 12
 
 
+def _spending_strategy(plan):
+    """Optional retirement spending rule; None means fixed spending (the default).
+
+    Guardrails: at each retirement anniversary the planned withdrawal rate is compared with
+    the rate at retirement start. Above (1 + band) times that rate, discretionary spending
+    is cut by `adjustment`; below (1 - band), it is raised by the same proportion. The
+    multiplier stays within [floor, ceiling] and never touches essential spending.
+    """
+    rule = plan.get('spending_strategy')
+    if rule is None:
+        return None
+    if not isinstance(rule, dict) or rule.get('kind', 'fixed') not in ('fixed', 'guardrails'):
+        raise ValueError('spending_strategy kind must be fixed or guardrails')
+    if rule.get('kind', 'fixed') == 'fixed':
+        return None
+    return dict(band=number(rule.get('band', .2), 'guardrail band', .01, .9),
+                adjustment=number(rule.get('adjustment', .1), 'guardrail adjustment', .01, .5),
+                floor=number(rule.get('floor', .7), 'spending floor', 0, 1),
+                ceiling=number(rule.get('ceiling', 1.2), 'spending ceiling', 1, 3))
+
+
 def _real_rate(nominal, deflator):
     # Monthly real rate; exact when there is no inflation so real-dollar inputs are unchanged.
     return nominal if deflator == 1 else (1 + nominal) / deflator - 1
@@ -357,6 +378,11 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     def annualized_stream(row):
         return row['amount'] * (1 + row['growth']) ** ((retirement_start - row['start']) / 12) * 12 / row['every']
     annual_desired_spending = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'expense')
+    strategy = _spending_strategy(plan)
+    retirement_essential_spending = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'expense' and row['essential'])
+    retirement_discretionary_spending = annual_desired_spending - retirement_essential_spending
+    spending_factor = lowest_spending_factor = 1.0
+    initial_withdrawal_rate = None
     annual_retirement_income = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'income')
     if plan.get('_quick_adapter'):
         annual_desired_spending, annual_retirement_income = p['expenses'], 0.0
@@ -409,6 +435,21 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         income = sum(value for row, value in amounts if row['kind'] == 'income')
         essential = sum(value for row, value in amounts if row['kind'] == 'expense' and row['essential'])
         desired = sum(value for row, value in amounts if row['kind'] == 'expense' and not row['essential'])
+        if strategy and month >= retirement_start:
+            if (month - retirement_start) % 12 == 0:
+                available_now = sum(balances[i] for i in available_indices)
+                planned = max(0.0, retirement_essential_spending + retirement_discretionary_spending * spending_factor
+                              - annual_retirement_income)
+                if available_now > 0:
+                    rate = planned / available_now
+                    if initial_withdrawal_rate is None:
+                        initial_withdrawal_rate = rate
+                    elif rate > initial_withdrawal_rate * (1 + strategy['band']):
+                        spending_factor = max(strategy['floor'], spending_factor * (1 - strategy['adjustment']))
+                    elif rate < initial_withdrawal_rate * (1 - strategy['band']):
+                        spending_factor = min(strategy['ceiling'], spending_factor * (1 + strategy['adjustment']))
+                lowest_spending_factor = min(lowest_spending_factor, spending_factor)
+            desired *= spending_factor
         cash = income
         withdrawal_tax = 0.0
         def pay(amount):
@@ -548,7 +589,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             desired_expenses=desired, desired_unfunded=desired_unfunded,
             debt_payment=debt_payment, debt_due=debt_due, debt_unfunded=debt_unfunded, debt_balance=debt_balance,
             debt_interest=debt_interest, debt_principal=debt_principal, debts=debt_ledger, accounts=list(balances),
-            withdrawal_tax=withdrawal_tax, available_after_tax=after_tax_value())
+            withdrawal_tax=withdrawal_tax, available_after_tax=after_tax_value(), spending_factor=spending_factor)
         if month >= retirement_start:
             # Sale proceeds offset the costs they fund; payoffs from them are counted as paid.
             finite = (debt_payment + debt_unfunded + purchase_due + finite_upkeep - sale_proceeds
@@ -569,7 +610,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         for key in fields:
             year_row[key] += row[key]
         if month % 12 == 0:
-            year_row.update({key:row[key] for key in ('balance','available_balance','net_worth','debt_balance','accounts','purchase_asset_value')})
+            year_row.update({key:row[key] for key in ('balance','available_balance','net_worth','debt_balance','accounts','purchase_asset_value','spending_factor')})
             annual.append(year_row)
         if retain_monthly:
             monthly.append(row)
@@ -604,7 +645,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     summary = dict(initial_assets=initial, initial_debt=initial_debt, ending_assets=closing,
         ending_net_worth=closing-debt_balance, total_unfunded=total_unfunded,
         first_shortfall_age=p['age']+(first_shortfall / 12) if first_shortfall else None,
-        retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance, **target_fields)
+        retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance,
+        spending_strategy=strategy, lowest_spending_factor=lowest_spending_factor, **target_fields)
     warnings = ['Streams are after tax. Account withdrawals pay a flat per-account withdrawal_tax_rate, not statutory brackets. Unavailable accounts cannot fund spending.',
         'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
         'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.']
@@ -692,7 +734,7 @@ def simulate(plan, settings=None):
                 retirement_year=retirement_year, retirement_age=summary['retirement_age'], retirement_balance=summary['retirement_balance'], accumulation_shortfall=projected['accumulation_shortfall'],
                 retirement_feasible=projected['essential_spending_funded'] is True,
                 first_shortfall_year=math.ceil(first_month/12) if first_month else None,
-                cumulative_unfunded=summary['total_unfunded'],
+                cumulative_unfunded=summary['total_unfunded'], lowest_spending_factor=summary['lowest_spending_factor'],
                 annual=[{key: row[key] for key in ('year','age','balance','net_worth','unfunded')} for row in projected['annual']],
                 **{key:projected[key] for key in ('portfolio_survives','essential_spending_funded','desired_lifestyle_funded')}))
             continue
@@ -738,6 +780,13 @@ def simulate(plan, settings=None):
         outcomes[key] = dict(numerator=sum(evaluated), denominator=len(evaluated), excluded=trials-len(evaluated),
             rate=sum(evaluated)/len(evaluated) if evaluated else None, excluded_reason='Retirement not reached before horizon')
     endings = [x['ending_balance'] for x in paths]
+    strategy = _spending_strategy(plan) if full else None
+    if strategy and paths:
+        lows = [x['lowest_spending_factor'] for x in paths]
+        cut = [v for v in lows if v < 1 - 1e-9]
+        outcomes['spending_cuts'] = dict(numerator=len(cut), denominator=len(lows), rate=len(cut) / len(lows),
+            median_lowest_factor=_percentile(lows, .5), p10_lowest_factor=_percentile(lows, .1),
+            definition='Paths where the guardrail rule cut discretionary spending below plan at least once')
     meta = metadata(original_plan, mode)
     setting_metadata = dict(settings, trials=trials, seed=seed, mode=mode, retirement_year=retirement_year)
     if essential is not None:
