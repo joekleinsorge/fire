@@ -419,6 +419,65 @@ class FuturePurchaseTests(unittest.TestCase):
             project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=1, loan_inflation=2)]))
 
 
+class WithdrawalTaxTests(unittest.TestCase):
+    def plan(self, accounts, **changes):
+        return dict(dict(age=60, retirement_age=60, horizon=3, return_rate=0, withdrawal_rate=.04,
+            accounts=accounts, streams=[dict(kind='expense', amount=1000)]), **changes)
+
+    def test_roth_and_pre_tax_differ_at_the_same_balance(self):
+        roth = project(self.plan([dict(balance=100000, return_rate=0, tax_treatment='roth')]))
+        pre_tax = project(self.plan([dict(balance=100000, return_rate=0, tax_treatment='pre_tax')]))
+        self.assertEqual(roth['monthly'][0]['withdrawal_tax'], 0)
+        self.assertAlmostEqual(roth['summary']['ending_assets'], 100000 - 36000)
+        # The 22% default grosses each 1,000 up to 1,000 / .78.
+        self.assertAlmostEqual(pre_tax['monthly'][0]['withdrawal_tax'], 1000 / .78 - 1000)
+        self.assertAlmostEqual(pre_tax['summary']['ending_assets'], 100000 - 36 * 1000 / .78)
+        self.assertEqual(roth['target'], 300000)
+        self.assertAlmostEqual(pre_tax['target'], 300000 / .78)
+        self.assertAlmostEqual(pre_tax['after_tax_target'], 300000)
+        self.assertAlmostEqual(pre_tax['target_tax_rate'], .22)
+
+    def test_gross_up_follows_withdrawal_order_and_reconciles(self):
+        accounts = [dict(balance=500, return_rate=0, tax_treatment='taxable', withdrawal_tax_rate=.2),
+                    dict(balance=100000, return_rate=.03, fee_rate=.01, tax_treatment='pre_tax', withdrawal_tax_rate=.25)]
+        result = project(self.plan(accounts, streams=[dict(kind='income', amount=200), dict(kind='expense', amount=1000)],
+                                   debts=[dict(balance=1200, months=12)]))
+        first = result['monthly'][0]
+        # 200 of income, then the 500 taxable balance delivers 400, then the rest from pre-tax.
+        self.assertAlmostEqual(first['accounts'][0], 0)
+        self.assertAlmostEqual(first['withdrawal_tax'], 100 + (1000 + 100 - 200 - 400) / .75 * .25)
+        self.assertAlmostEqual(result['target_tax_rate'], 1 - (500 * .8 + 100000 * .75) / 100500)
+        for row in result['monthly'] + result['annual']:
+            self.assertAlmostEqual(row['closing'] if 'closing' in row else row['balance'],
+                row['opening'] + row['gain'] - row['fees'] + row['income'] - row['funded_expenses']
+                - row['debt_payment'] - row['withdrawal_tax'], places=6)
+        self.assertAlmostEqual(result['monthly'][-1]['available_after_tax'], result['monthly'][-1]['accounts'][1] * .75)
+
+    def test_shortfall_delivers_only_the_after_tax_value(self):
+        result = project(self.plan([dict(balance=780, return_rate=0, tax_treatment='pre_tax')], horizon=1))
+        first = result['monthly'][0]
+        self.assertAlmostEqual(first['funded_expenses'], 780 * .78)
+        self.assertAlmostEqual(first['unfunded'], 1000 - 780 * .78)
+        self.assertAlmostEqual(first['withdrawal_tax'], 780 * .22)
+
+    def test_default_accounts_are_untaxed_and_rates_validate(self):
+        plain = project(self.plan([dict(balance=100000, return_rate=0)]))
+        explicit = project(self.plan([dict(balance=100000, return_rate=0, tax_treatment='after_tax')]))
+        self.assertEqual(plain['monthly'], explicit['monthly'])
+        self.assertEqual(plain['target'], plain['after_tax_target'])
+        self.assertEqual(sum(row['withdrawal_tax'] for row in plain['annual']), 0)
+        overridden = project(self.plan([dict(balance=100000, return_rate=0, tax_treatment='pre_tax', withdrawal_tax_rate=0)]))
+        self.assertEqual(overridden['summary']['ending_assets'], plain['summary']['ending_assets'])
+        for bad in (dict(tax_treatment='hsa'), dict(withdrawal_tax_rate=.95), dict(withdrawal_tax_rate='x')):
+            with self.assertRaises(ValueError):
+                project(self.plan([dict(balance=1000, **bad)]))
+
+    def test_simulation_runs_with_taxed_accounts(self):
+        plan = self.plan([dict(balance=100000, type='retirement', tax_treatment='pre_tax')], horizon=5)
+        result = simulate(plan, dict(trials=5, seed=1))
+        self.assertEqual(result['completed'], 5)
+
+
 class ChildPlanningTests(unittest.TestCase):
     def base(self):
         return dict(age=40, income=60, expenses=40, assets=1000, return_rate=0,
