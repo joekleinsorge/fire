@@ -234,6 +234,26 @@ def _real_rate(nominal, deflator):
     return nominal if deflator == 1 else (1 + nominal) / deflator - 1
 
 
+TAX_TREATMENTS = ('after_tax', 'pre_tax', 'roth', 'taxable')
+DEFAULT_WITHDRAWAL_TAX_RATES = dict(after_tax=0.0, pre_tax=.22, roth=0.0, taxable=.10)
+
+
+def _withdrawal_tax_rate(account):
+    # Phase 1: one flat effective rate per account; brackets, gains basis and RMDs come later.
+    treatment = account.get('tax_treatment', 'after_tax')
+    if treatment not in TAX_TREATMENTS:
+        raise ValueError('unsupported tax_treatment')
+    rate = account.get('withdrawal_tax_rate')
+    return DEFAULT_WITHDRAWAL_TAX_RATES[treatment] if rate is None else number(rate, 'withdrawal_tax_rate', 0, .9)
+
+
+def _gross_withdrawal(balance, needed, rate):
+    """The one place tax on a withdrawal is computed: returns (taken, delivered, tax)."""
+    taken = min(balance, needed / (1 - rate))
+    tax = taken * rate
+    return taken, taken - tax, tax
+
+
 def _full_projection(plan, p, rates=None, retain_monthly=True):
     purchases = _purchases(plan)
     children = child_planning.project(plan, p['horizon'], initialize_only=True)
@@ -259,6 +279,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     for a in accounts:
         if a.get('type', 'investment') not in ('cash', 'investment', 'retirement', 'property', 'other'):
             raise ValueError('unsupported account type')
+    tax_rates = [_withdrawal_tax_rate(a) for a in accounts]
     normalized = []
     for stream in streams:
         if stream.get('kind') not in ('income', 'expense'):
@@ -345,12 +366,19 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_obligations = 0.0
     initial_available = sum(balances[i] for i in available_indices)
     retirement_available_balance = initial_available if retirement_month == 0 else None
+    def after_tax_value():
+        return sum(balances[i] * (1 - tax_rates[i]) for i in available_indices)
+    def blended_tax_rate():
+        # Flat rates make the spendable value order-independent: sum(balance * (1 - rate)).
+        gross = sum(balances[i] for i in available_indices)
+        return 1 - after_tax_value() / gross if gross > 0 else 0.0
+    retirement_tax_rate = blended_tax_rate() if retirement_month == 0 else None
     retirement_survives = True
     retirement_essential = True
     retirement_desired = True
     accumulation_shortfall = 0.0
     fields = ('income', 'expenses', 'essential_expenses', 'funded_expenses', 'unfunded',
-              'essential_unfunded', 'desired_expenses', 'desired_unfunded', 'debt_payment', 'debt_due', 'debt_unfunded', 'debt_interest', 'debt_principal', 'gain', 'fees', 'purchase_due', 'purchase_paid', 'purchase_unfunded', 'purchase_upkeep', 'purchase_asset_added', 'purchase_loan_drawn', 'purchase_sale_proceeds', 'purchase_sale_costs', 'purchase_debt_payoff', 'child_contributions', 'child_contribution_due', 'child_education', 'child_education_due', 'child_unfunded')
+              'essential_unfunded', 'desired_expenses', 'desired_unfunded', 'debt_payment', 'debt_due', 'debt_unfunded', 'debt_interest', 'debt_principal', 'gain', 'fees', 'purchase_due', 'purchase_paid', 'purchase_unfunded', 'purchase_upkeep', 'purchase_asset_added', 'purchase_loan_drawn', 'purchase_sale_proceeds', 'purchase_sale_costs', 'purchase_debt_payoff', 'child_contributions', 'child_contribution_due', 'child_education', 'child_education_due', 'child_unfunded', 'withdrawal_tax')
     for month in range(1, p['horizon'] * 12 + 1):
         opening = sum(balances) + sum(a['value'] for a in purchase_assets.values())
         gain = fee = 0.0
@@ -374,15 +402,20 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         essential = sum(value for row, value in amounts if row['kind'] == 'expense' and row['essential'])
         desired = sum(value for row, value in amounts if row['kind'] == 'expense' and not row['essential'])
         cash = income
+        withdrawal_tax = 0.0
         def pay(amount):
-            nonlocal cash
+            # Withdrawals are grossed up so `amount` reaches spending after each account's tax.
+            nonlocal cash, withdrawal_tax
             from_income = min(cash, amount)
             cash -= from_income
             remaining = amount - from_income
             for i in available_indices:
-                taken = min(balances[i], remaining)
+                if remaining <= 0:
+                    break
+                taken, delivered, tax = _gross_withdrawal(balances[i], remaining, tax_rates[i])
                 balances[i] -= taken
-                remaining -= taken
+                withdrawal_tax += tax
+                remaining = max(0.0, remaining - delivered)
             return amount - remaining, remaining
         essential_paid, essential_unfunded = pay(essential)
         debt_payment = debt_due = debt_unfunded = debt_interest = debt_principal = 0.0
@@ -482,6 +515,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         else:
             if len(balances) == len(accounts):
                 balances.append(0.0)
+                tax_rates.append(0.0)
                 available_indices.append(len(accounts))
             balances[-1] += cash
         closing = sum(balances) + asset_value
@@ -505,7 +539,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             funded_expenses=essential_paid+desired_paid+purchase_paid+child_cash['contributions']+child_cash['education'], unfunded=unfunded, essential_unfunded=essential_unfunded,
             desired_expenses=desired, desired_unfunded=desired_unfunded,
             debt_payment=debt_payment, debt_due=debt_due, debt_unfunded=debt_unfunded, debt_balance=debt_balance,
-            debt_interest=debt_interest, debt_principal=debt_principal, debts=debt_ledger, accounts=list(balances))
+            debt_interest=debt_interest, debt_principal=debt_principal, debts=debt_ledger, accounts=list(balances),
+            withdrawal_tax=withdrawal_tax, available_after_tax=after_tax_value())
         if month >= retirement_start:
             # Sale proceeds offset the costs they fund; payoffs from them are counted as paid.
             finite = (debt_payment + debt_unfunded + purchase_due + finite_upkeep - sale_proceeds
@@ -520,6 +555,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         if month == retirement_month:
             retirement_balance = closing
             retirement_available_balance = row['available_balance']
+            retirement_tax_rate = blended_tax_rate()
         if (month - 1) % 12 == 0:
             year_row = dict(year=(month-1)//12+1, age=p['age']+(month-1)//12+1, opening=opening, **{key:0.0 for key in fields})
         for key in fields:
@@ -530,7 +566,11 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         if retain_monthly:
             monthly.append(row)
     retirement_obligations = max(0.0, retirement_obligations)
-    target = spending_target + retirement_obligations
+    after_tax_target = spending_target + retirement_obligations
+    if retirement_tax_rate is None:
+        # Retirement falls after the horizon; use the mix of available accounts at its end.
+        retirement_tax_rate = blended_tax_rate()
+    target = after_tax_target / (1 - retirement_tax_rate)
     if not math.isfinite(target):
         raise ValueError('retirement target exceeds numerical range')
     has_window = retirement_month < p['horizon'] * 12
@@ -540,13 +580,14 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     # move the crossing earlier or later stay visible.
     earliest_fi_age = p['age'] if initial_available >= target else next(
         (row['age'] for row in annual if row['available_balance'] >= target), None)
-    target_fields = dict(target=target, annual_desired_spending=annual_desired_spending, retirement_obligations=retirement_obligations,
+    target_fields = dict(target=target, after_tax_target=after_tax_target, target_tax_rate=retirement_tax_rate,
+        annual_desired_spending=annual_desired_spending, retirement_obligations=retirement_obligations,
         annual_retirement_income=annual_retirement_income, annual_net_spending=annual_net_spending,
         years_to_target=years_to_target, retirement_age=retirement_age,
         fi_age=p['age'] + years_to_target if years_to_target is not None else None,
         earliest_fi_age=earliest_fi_age)
     target_metadata = dict(
-        basis='Enabled after-tax streams active at the start of retirement, annualized by recurrence at their retirement-start purchasing-power amounts; plus open-ended upkeep for enabled, unsold purchases within the horizon. Costs that end and fall after retirement starts (debt and purchase loan payments, one-time purchases net of sale proceeds, upkeep with a term or a later sale, and household child funding) are added as retirement_obligations, their present value at retirement start discounted at the plan return.',
+        basis='Enabled after-tax streams active at the start of retirement, annualized by recurrence at their retirement-start purchasing-power amounts; plus open-ended upkeep for enabled, unsold purchases within the horizon. Costs that end and fall after retirement starts (debt and purchase loan payments, one-time purchases net of sale proceeds, upkeep with a term or a later sale, and household child funding) are added as retirement_obligations, their present value at retirement start discounted at the plan return. That after-tax amount is grossed up to account balances by target_tax_rate, the balance-weighted withdrawal_tax_rate of available accounts at retirement start (at the horizon end if retirement falls later); with flat per-account rates, available balances at that mix reach the target exactly when their after-tax value covers after_tax_target.',
         target_label='FI target from annualized retirement spending less income',
         balance_label='Available account assets',
         crossing_label='First year-end at or after retirement with available assets at the FI target',
@@ -561,7 +602,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         portfolio_survives=retirement_survives if has_window else None,
         essential_spending_funded=retirement_essential if has_window else None,
         desired_lifestyle_funded=retirement_desired if has_window else None,
-        metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Unavailable accounts cannot fund spending.',
+        metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Account withdrawals pay a flat per-account withdrawal_tax_rate, not statutory brackets. Unavailable accounts cannot fund spending.',
             'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
             'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.'])
 
