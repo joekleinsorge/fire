@@ -46,3 +46,4 @@
 .file-button{cursor:pointer}
 .progress-chart svg{width:100%;height:auto;display:block}
 .file-button{letter-spacing:0;margin:0}
+.ss-compare{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:4px 0 6px}.ss-compare>div{background:#f5f7f3;border:1px solid transparent;border-radius:7px;padding:10px 12px}.ss-compare>div.selected{background:#f1f7f0;border-color:#b9d5c2}.ss-compare span,.ss-compare small{display:block;color:#7f8b84;font-size:9px}.ss-compare strong{display:block;margin:3px 0;color:#1e5147;font:600 15px 'Manrope',sans-serif}.ss-compare p{grid-column:1/-1;margin:2px 0 0;font-size:11px;color:#3c564c}.ss-compare p strong{display:inline;margin:0;font:600 12px 'DM Sans',sans-serif}#add-ss{white-space:nowrap;flex-shrink:0}@media(max-width:600px){.ss-compare{grid-template-columns:1fr}}

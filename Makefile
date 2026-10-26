@@ -12,3 +12,4 @@ check: test
 	node --check web/charts.js
 	node --check web/healthcare.js
 	node --check web/progress.js
+	node --check web/social-security.js

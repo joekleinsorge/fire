@@ -7,6 +7,7 @@ import statistics
 from datetime import date
 import re
 from . import children as child_planning
+from . import social_security as ss_planning
 
 VERSION = '2.0.0'
 
@@ -293,6 +294,13 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         if row['end'] < row['start']:
             raise ValueError('stream end must follow start')
         normalized.append(row)
+    # Claimed benefits are level monthly income in today's dollars from the claim month,
+    # so they enter the ledger and the retirement-start income like any other stream.
+    social_security = [] if plan.get('_quick_adapter') else ss_planning.normalize(
+        plan, p['age'], p['horizon'] * 12, valuation, number)
+    normalized.extend(dict(kind='income', amount=row['monthly_benefit'], start=row['start_month'],
+                           end=p['horizon'] * 12 + 1, every=1, growth=0.0, enabled=row['enabled'], essential=True)
+                      for row in social_security)
     debt_rows = []
     # annual_rate is the quoted (nominal) rate and payments are fixed in nominal terms. In
     # constant purchasing power they shrink with inflation_rate, and interest accrues at the
@@ -587,7 +595,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         fi_age=p['age'] + years_to_target if years_to_target is not None else None,
         earliest_fi_age=earliest_fi_age)
     target_metadata = dict(
-        basis='Enabled after-tax streams active at the start of retirement, annualized by recurrence at their retirement-start purchasing-power amounts; plus open-ended upkeep for enabled, unsold purchases within the horizon. Costs that end and fall after retirement starts (debt and purchase loan payments, one-time purchases net of sale proceeds, upkeep with a term or a later sale, and household child funding) are added as retirement_obligations, their present value at retirement start discounted at the plan return. That after-tax amount is grossed up to account balances by target_tax_rate, the balance-weighted withdrawal_tax_rate of available accounts at retirement start (at the horizon end if retirement falls later); with flat per-account rates, available balances at that mix reach the target exactly when their after-tax value covers after_tax_target.',
+        basis='Enabled after-tax streams and claimed Social Security benefits active at the start of retirement, annualized by recurrence at their retirement-start purchasing-power amounts; plus open-ended upkeep for enabled, unsold purchases within the horizon. Costs that end and fall after retirement starts (debt and purchase loan payments, one-time purchases net of sale proceeds, upkeep with a term or a later sale, and household child funding) are added as retirement_obligations, their present value at retirement start discounted at the plan return. That after-tax amount is grossed up to account balances by target_tax_rate, the balance-weighted withdrawal_tax_rate of available accounts at retirement start (at the horizon end if retirement falls later); with flat per-account rates, available balances at that mix reach the target exactly when their after-tax value covers after_tax_target.',
         target_label='FI target from annualized retirement spending less income',
         balance_label='Available account assets',
         crossing_label='First year-end at or after retirement with available assets at the FI target',
@@ -597,14 +605,17 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         ending_net_worth=closing-debt_balance, total_unfunded=total_unfunded,
         first_shortfall_age=p['age']+(first_shortfall / 12) if first_shortfall else None,
         retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance, **target_fields)
-    return dict(**target_fields, children=children, future_purchases=purchases, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
+    warnings = ['Streams are after tax. Account withdrawals pay a flat per-account withdrawal_tax_rate, not statutory brackets. Unavailable accounts cannot fund spending.',
+        'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
+        'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.']
+    if social_security:
+        warnings.append('Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars; taxation of benefits, the earnings test, and spousal or survivor benefits are not modeled.')
+    return dict(**target_fields, children=children, future_purchases=purchases, social_security=social_security, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
         accumulation_shortfall=accumulation_shortfall,
         portfolio_survives=retirement_survives if has_window else None,
         essential_spending_funded=retirement_essential if has_window else None,
         desired_lifestyle_funded=retirement_desired if has_window else None,
-        metadata=metadata(plan, 'full'), warnings=['Streams are after tax. Account withdrawals pay a flat per-account withdrawal_tax_rate, not statutory brackets. Unavailable accounts cannot fund spending.',
-            'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
-            'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.'])
+        metadata=metadata(plan, 'full'), warnings=warnings)
 
 
 def _percentile(values, p):
