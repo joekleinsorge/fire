@@ -230,6 +230,43 @@ def _upkeep_active(item, month):
     return item['upkeep_years'] is None or month <= item['month'] + item['upkeep_years'] * 12
 
 
+def _household(plan, p):
+    """People in the plan and when each planned lifetime ends.
+
+    Without a partner the plan is one person and nothing changes. With a partner, each
+    person may set a life expectancy; the first person to reach it ends their owned income
+    and Social Security from the month after, and household spending continues at
+    survivor_spending of plan. Ages are at the valuation date, like plan age.
+    """
+    partner = plan.get('partner')
+    if partner is None:
+        return dict(couple=False, ages=dict(self=p['age']), deaths={}, first_death=None, survivor_spending=1.0)
+    if not isinstance(partner, dict):
+        raise ValueError('partner must be an object')
+    ages = dict(self=p['age'], partner=number(partner.get('age'), 'partner age', 0, 150, True))
+    expectancies = dict(self=plan.get('life_expectancy'), partner=partner.get('life_expectancy'))
+    deaths = {}
+    for who, value in expectancies.items():
+        if value is None:
+            continue
+        value = number(value, f'{who} life_expectancy', 0, 150, True)
+        if value <= ages[who]:
+            raise ValueError('life expectancy must be after current age')
+        month = (value - ages[who]) * 12 + 1
+        if month <= p['horizon'] * 12:
+            deaths[who] = month
+    first = min(((m, who) for who, m in deaths.items()), default=None)
+    return dict(couple=True, ages=ages, deaths=deaths, first_death=first,
+                survivor_spending=number(plan.get('survivor_spending', 1), 'survivor_spending', 0, 1.5))
+
+
+def _owner(row, household, label):
+    owner = row.get('owner', 'self')
+    if owner not in ('self', 'partner') or (owner == 'partner' and not household['couple']):
+        raise ValueError(f'{label} owner must be self, or partner when the plan has one')
+    return owner
+
+
 def _spending_strategy(plan):
     """Optional retirement spending rule; None means fixed spending (the default).
 
@@ -311,17 +348,43 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             end=number(stream.get('end_month', p['horizon'] * 12 + 1), 'end_month', 1, 1801, True),
             every=number(stream.get('every_months', 1), 'every_months', 1, 1200, True),
             growth=number(stream.get('growth_rate', 0), 'growth_rate', -.99, 10),
-            enabled=flag(stream, 'enabled', True), essential=flag(stream, 'essential', True))
+            enabled=flag(stream, 'enabled', True), essential=flag(stream, 'essential', True), owner=stream.get('owner', 'self'))
         if row['end'] < row['start']:
             raise ValueError('stream end must follow start')
         normalized.append(row)
     # Claimed benefits are level monthly income in today's dollars from the claim month,
     # so they enter the ledger and the retirement-start income like any other stream.
+    household = _household(plan, p)
+    raw_benefits = {row.get('id'): row for row in plan.get('social_security', []) if isinstance(row, dict)}
+    # Benefits given only a birth year are timed from their owner's age at valuation.
+    owner_age = lambda row: household['ages'][_owner(row, household, 'social security')]
     social_security = [] if plan.get('_quick_adapter') else ss_planning.normalize(
-        plan, p['age'], p['horizon'] * 12, valuation, number)
-    normalized.extend(dict(kind='income', amount=row['monthly_benefit'], start=row['start_month'],
-                           end=p['horizon'] * 12 + 1, every=1, growth=0.0, enabled=row['enabled'], essential=True)
-                      for row in social_security)
+        plan, owner_age, p['horizon'] * 12, valuation, number)
+    for stream, row in zip(streams, normalized):
+        row['owner'] = _owner(stream, household, 'stream')
+    for row in social_security:
+        row['owner'] = _owner(raw_benefits[row['id']], household, 'social security')
+        normalized.append(dict(kind='income', amount=row['monthly_benefit'], start=row['start_month'],
+                               end=p['horizon'] * 12 + 1, every=1, growth=0.0, enabled=row['enabled'], essential=True,
+                               owner=row['owner'], benefit=True))
+    # A person's owned income (streams and their benefit) stops when their planned lifetime ends.
+    for row in normalized:
+        death = household['deaths'].get(row['owner'])
+        if death is not None and row['kind'] == 'income' and death < row['end']:
+            row['end'] = max(row['start'], death)
+    # The survivor keeps the larger of the two benefits: top up their own by the difference.
+    first_death = household['first_death']
+    if first_death:
+        died, survivor = first_death[1], 'partner' if first_death[1] == 'self' else 'self'
+        paid = lambda who: [r for r in social_security if r['enabled'] and r['owner'] == who]
+        if paid(died) and paid(survivor):
+            gap = max(r['monthly_benefit'] for r in paid(died)) - max(r['monthly_benefit'] for r in paid(survivor))
+            start = max(first_death[0], min(r['start_month'] for r in paid(survivor)))
+            end = household['deaths'].get(survivor, p['horizon'] * 12 + 1)
+            if gap > 0 and start < end:
+                normalized.append(dict(kind='income', amount=gap, start=start, end=end, every=1, growth=0.0,
+                                       enabled=True, essential=True, owner=survivor, benefit=True))
+    survivor_from = first_death[0] if first_death else None
     debt_rows = []
     # annual_rate is the quoted (nominal) rate and payments are fixed in nominal terms. In
     # constant purchasing power they shrink with inflation_rate, and interest accrues at the
@@ -375,8 +438,11 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_balance = initial if retirement_month == 0 else None
     retirement_start = retirement_month + 1
     retirement_streams = [row for row in normalized if row['enabled'] and row['start'] <= retirement_start < row['end']]
+    # Spending is already at the survivor level if the first death precedes retirement.
+    survivor_at_retirement = household['survivor_spending'] if survivor_from is not None and survivor_from <= retirement_start else 1.0
     def annualized_stream(row):
-        return row['amount'] * (1 + row['growth']) ** ((retirement_start - row['start']) / 12) * 12 / row['every']
+        scale = survivor_at_retirement if row['kind'] == 'expense' else 1.0
+        return row['amount'] * scale * (1 + row['growth']) ** ((retirement_start - row['start']) / 12) * 12 / row['every']
     annual_desired_spending = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'expense')
     strategy = _spending_strategy(plan)
     retirement_essential_spending = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'expense' and row['essential'])
@@ -433,6 +499,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         due = [row for row in normalized if row['enabled'] and row['start'] <= month < row['end'] and (month-row['start']) % row['every'] == 0]
         amounts = [(row, row['amount'] * (1 + row['growth']) ** ((month-row['start']) / 12)) for row in due]
         income = sum(value for row, value in amounts if row['kind'] == 'income')
+        survivor_factor = household['survivor_spending'] if survivor_from is not None and month >= survivor_from else 1.0
+        amounts = [(row, value * survivor_factor if row['kind'] == 'expense' else value) for row, value in amounts]
         essential = sum(value for row, value in amounts if row['kind'] == 'expense' and row['essential'])
         desired = sum(value for row, value in amounts if row['kind'] == 'expense' and not row['essential'])
         if strategy and month >= retirement_start:

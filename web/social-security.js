@@ -24,12 +24,12 @@ function openSocialSecurity(id){
   $('ss-claim-years').innerHTML=[62,63,64,65,66,67,68,69,70].map(y=>`<option value="${y}">${y}</option>`).join('');
   $('ss-claim-months').innerHTML=Array.from({length:12},(_,m)=>`<option value="${m}">${m}</option>`).join('');
   $('ss-name').value=r?.name||'';$('ss-birth-date').value=r?.birth_date||'';$('ss-pia').value=r?.pia_at_fra??'';
-  $('ss-claim-years').value=String(r?.claim_age_years??67);$('ss-claim-months').value=String(r?.claim_age_months??0);$('ss-enabled').checked=r?.enabled!==false;
+  $('ss-owner-label').hidden=!plan.partner;$('ss-owner').innerHTML=`<option value="self">You</option>${plan.partner?`<option value="partner">${esc(personName('partner'))}</option>`:''}`;$('ss-owner').value=plan.partner&&r?.owner==='partner'?'partner':'self';$('ss-claim-years').value=String(r?.claim_age_years??67);$('ss-claim-months').value=String(r?.claim_age_months??0);$('ss-enabled').checked=r?.enabled!==false;
   renderSocialSecurityPreview();$('ss-dialog').showModal()}
 ['ss-birth-date','ss-pia','ss-claim-years','ss-claim-months'].forEach(id=>$(id).addEventListener('input',renderSocialSecurityPreview));
 $('add-ss').onclick=()=>openSocialSecurity();
 $('ss-form').onsubmit=async e=>{e.preventDefault();const years=Number($('ss-claim-years').value),months=Number($('ss-claim-months').value);
-  const row={id:editingSocialSecurity||uid(),name:$('ss-name').value.trim(),birth_date:$('ss-birth-date').value,pia_at_fra:Number($('ss-pia').value),claim_age_years:years,claim_age_months:months,enabled:$('ss-enabled').checked};
+  const row={id:editingSocialSecurity||uid(),name:$('ss-name').value.trim(),birth_date:$('ss-birth-date').value,pia_at_fra:Number($('ss-pia').value),claim_age_years:years,claim_age_months:months,enabled:$('ss-enabled').checked,owner:$('ss-owner').value||'self'};
   const candidate=structuredClone(plan);candidate.social_security=Array.isArray(candidate.social_security)?candidate.social_security:[];const i=candidate.social_security.findIndex(x=>x.id===row.id);if(i<0)candidate.social_security.push(row);else candidate.social_security[i]=row;
   try{const result=await projectPlan(candidate);plan=candidate;touch();projection=result;$('ss-dialog').close();renderTables();showSaveState();tell('Social Security applied and projection updated.')}catch(err){tell(err.message,true)}};
 document.addEventListener('click',e=>{const edit=e.target.closest('[data-edit-ss]'),del=e.target.closest('[data-remove-ss]');if(edit)openSocialSecurity(edit.dataset.editSs);if(del&&confirm('Remove this Social Security benefit from the plan?')){plan.social_security=(plan.social_security||[]).filter(r=>r.id!==del.dataset.removeSs);touch();renderTables();runProjection().catch(err=>tell(err.message,true))}});

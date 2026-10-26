@@ -538,6 +538,51 @@ class SpendingStrategyTests(unittest.TestCase):
             project(self.plan(spending_strategy=dict(kind='percent')))
 
 
+class CoupleTests(unittest.TestCase):
+    def plan(self, **changes):
+        return dict(dict(age=60, retirement_age=60, horizon=10, return_rate=0, withdrawal_rate=.04,
+            accounts=[dict(type='investment', balance=2000000, return_rate=0)],
+            streams=[dict(kind='expense', amount=5000),
+                     dict(kind='income', amount=1000, owner='self'),
+                     dict(kind='income', amount=800, owner='partner')],
+            partner=dict(age=58)), **changes)
+
+    def test_a_couple_without_life_expectancies_is_unchanged(self):
+        single = self.plan()
+        single.pop('partner')
+        single['streams'] = [dict(row) for row in single['streams']]
+        single['streams'][2]['owner'] = 'self'
+        self.assertEqual(project(self.plan())['annual'], project(single)['annual'])
+
+    def test_first_death_ends_owned_income_and_scales_spending(self):
+        result = project(self.plan(partner=dict(age=58, life_expectancy=61), survivor_spending=.7))
+        months = result['monthly']
+        # The partner reaches 61 after 36 months, so month 37 is the first without them.
+        self.assertAlmostEqual(months[35]['income'], 1800)
+        self.assertAlmostEqual(months[36]['income'], 1000)
+        self.assertAlmostEqual(months[35]['expenses'], 5000)
+        self.assertAlmostEqual(months[36]['expenses'], 3500)
+
+    def test_survivor_keeps_the_larger_social_security_benefit(self):
+        benefits = [dict(id='me', name='Me', birth_year=1966, pia_at_fra=1500, claim_age_years=67, owner='self'),
+                    dict(id='you', name='You', birth_year=1968, pia_at_fra=2500, claim_age_years=67, owner='partner')]
+        plan = self.plan(age=66, horizon=10, partner=dict(age=64, life_expectancy=70), social_security=benefits,
+                         streams=[dict(kind='expense', amount=5000)])
+        months = project(plan)['monthly']
+        # Partner claims at 67 (month 37) and dies at 70 (month 73); I claim at 67 (month 13).
+        self.assertAlmostEqual(months[12]['income'], 1500)
+        self.assertAlmostEqual(months[40]['income'], 4000)
+        self.assertAlmostEqual(months[80]['income'], 2500)
+
+    def test_partner_owner_requires_a_partner(self):
+        plan = self.plan()
+        plan.pop('partner')
+        with self.assertRaisesRegex(ValueError, 'owner'):
+            project(plan)
+        with self.assertRaisesRegex(ValueError, 'life expectancy'):
+            project(self.plan(partner=dict(age=58, life_expectancy=50)))
+
+
 class ChildPlanningTests(unittest.TestCase):
     def base(self):
         return dict(age=40, income=60, expenses=40, assets=1000, return_rate=0,

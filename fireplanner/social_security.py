@@ -64,9 +64,11 @@ def normalize(plan, age, horizon_months, valuation, number):
     Month 1 is the calendar month after the valuation month. With a birth_date the
     benefit starts in the first month the person has attained the claiming age (for a
     reduced benefit, the first month they are that age throughout). With only a
-    birth_year the person is taken to be exactly plan age at valuation, matching how
-    retirement_age maps to projection months.
+    birth_year the person is taken to be exactly their age at valuation (plan age, or the
+    result of `age` when it is a function of the row), matching how retirement_age maps to
+    projection months.
     """
+    age_of = age if callable(age) else (lambda row: age)
     rows = plan.get('social_security', [])
     if not isinstance(rows, list) or len(rows) > 10 or any(not isinstance(row, dict) for row in rows):
         raise ValueError('social_security must be a bounded list of objects')
@@ -104,7 +106,7 @@ def normalize(plan, age, horizon_months, valuation, number):
             offset = (attained.year - valuation.year) * 12 + attained.month - valuation.month
             start = offset + claim + (late and claim < full_retirement_age_months(birth_year))
         else:
-            start = claim - age * 12 + 1
+            start = claim - age_of(row) * 12 + 1
         start = min(max(1, start), horizon_months + 1)
         factor = benefit_factor(reduction, credits)
         result.append(dict(id=ident, name=row.get('name') if isinstance(row.get('name'), str) else None,
