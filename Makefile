@@ -6,3 +6,5 @@ test:
 check: test
 	python3 -m compileall -q fireplanner
 	node --check web/app.js
+	node --check web/children.js
+	node --check web/purchases.js

@@ -278,14 +278,131 @@ class FuturePurchaseTests(unittest.TestCase):
             plan['future_purchases'][0]['sell_account_id'] = 'missing'
             project(plan)
 
-    def test_time_limited_upkeep_stops_and_stays_out_of_target(self):
+    def test_time_limited_upkeep_stops_and_only_its_retirement_part_joins_target(self):
         tuition = dict(id='school', name='School', amount=0, month=3, annual_upkeep=24000, upkeep_years=1)
         result = project(self.plan(future_purchases=[tuition]))
+        baseline = project(self.plan())
         upkeep = [row['purchase_upkeep'] for row in result['monthly']]
         self.assertEqual(upkeep[:3], [0, 0, 0])
         self.assertEqual(upkeep[3:15], [2000] * 12)
         self.assertEqual(upkeep[15:], [0] * 9)
-        self.assertEqual(result['target'], project(self.plan())['target'])
+        # Retirement starts in month 13, so months 13-15 remain: a finite 6,000, not 24,000 / .04.
+        self.assertEqual(result['annual_desired_spending'], baseline['annual_desired_spending'])
+        self.assertAlmostEqual(result['retirement_obligations'], 6000)
+        self.assertAlmostEqual(result['target'], baseline['target'] + 6000)
+
+    def test_loan_rate_is_quoted_and_payments_shrink_with_inflation(self):
+        home = dict(id='home', name='Home', amount=100000, month=1, loan_amount=100000,
+                    loan_rate=.06, loan_inflation=.03, loan_months=24)
+        result = project(self.plan(horizon=3, retirement_age=43, future_purchases=[home]))
+        nominal = 100000 * .005 / (1 - 1.005 ** -24)
+        deflator = 1.03 ** (1 / 12)
+        payments = [row['debt_payment'] for row in result['monthly'][1:25]]
+        for k, paid in enumerate(payments[:23], start=1):
+            self.assertAlmostEqual(paid, nominal / deflator ** k, places=6)
+        # The final payment clears the loan; in today's dollars it costs less than its quoted total.
+        self.assertAlmostEqual(result['monthly'][24]['debt_balance'], 0, places=6)
+        self.assertLess(sum(payments), nominal * 24)
+        self.assertGreater(sum(payments), 100000)
+        # Omitting loan_inflation keeps the earlier constant-payment behaviour.
+        flat = project(self.plan(retirement_age=43, future_purchases=[dict(home, loan_inflation=0)]))
+        self.assertAlmostEqual(flat['monthly'][5]['debt_payment'], nominal)
+
+    def test_loan_payments_after_retirement_join_target_as_present_value(self):
+        car = dict(id='car', name='Car', amount=24000, month=6, loan_amount=24000, loan_rate=0, loan_months=24)
+        result = project(self.plan(horizon=4, future_purchases=[car]))
+        baseline = project(self.plan(horizon=4))
+        # Payments run months 7-30 at 1,000; months 13-30 fall after retirement starts.
+        self.assertAlmostEqual(result['retirement_obligations'], 18000)
+        self.assertAlmostEqual(result['target'] - baseline['target'], 18000)
+        discounted = project(self.plan(horizon=4, return_rate=.05,
+            accounts=[dict(type='investment', balance=200000, return_rate=0)], future_purchases=[car]))
+        expected = sum(1000 / 1.05 ** ((m - 13) / 12) for m in range(13, 31))
+        self.assertAlmostEqual(discounted['retirement_obligations'], expected)
+
+    def test_debt_rate_is_quoted_and_payments_shrink_with_inflation(self):
+        debt = dict(id='m', balance=12000, annual_rate=.06, months=12, inflation_rate=.03)
+        result = project(self.plan(debts=[debt]))
+        nominal = 12000 * .005 / (1 - 1.005 ** -12)
+        deflator = 1.03 ** (1 / 12)
+        for k, row in enumerate(result['monthly'][:11], start=1):
+            self.assertAlmostEqual(row['debt_payment'], nominal / deflator ** k, places=6)
+        self.assertAlmostEqual(result['monthly'][11]['debt_balance'], 0, places=6)
+        # An entered payment is nominal too.
+        fixed = project(self.plan(debts=[dict(debt, payment=500)]))
+        self.assertAlmostEqual(fixed['monthly'][2]['debt_payment'], 500 / deflator ** 3)
+
+    def test_debt_payments_and_purchases_after_retirement_join_target(self):
+        baseline = project(self.plan())
+        # 24 months at 500 a month; retirement starts in month 13, so 12 payments remain.
+        debt = project(self.plan(debts=[dict(id='m', balance=12000, annual_rate=0, months=24)]))
+        self.assertAlmostEqual(debt['retirement_obligations'], 6000)
+        self.assertAlmostEqual(debt['target'], baseline['target'] + 6000)
+        car = project(self.plan(future_purchases=[dict(id='car', name='Car', amount=30000, month=18)]))
+        self.assertAlmostEqual(car['target'], baseline['target'] + 30000)
+        before = project(self.plan(future_purchases=[dict(id='car', name='Car', amount=30000, month=6)]))
+        self.assertEqual(before['target'], baseline['target'])
+
+    def test_downsizing_after_retirement_nets_sale_proceeds(self):
+        plan = self.plan(accounts=[dict(id='invest', type='investment', balance=200000, return_rate=0),
+                                   dict(id='house', type='property', balance=500000, return_rate=0)])
+        baseline = project(plan)
+        plan['future_purchases'] = [dict(id='condo', name='Condo', amount=300000, month=18, adds_asset=True,
+                                         sell_account_id='house', sell_cost_rate=.06)]
+        result = project(plan)
+        # 470,000 of proceeds more than cover the 300,000 condo, so nothing is added.
+        self.assertEqual(result['retirement_obligations'], 0)
+        self.assertEqual(result['target'], baseline['target'])
+        plan['future_purchases'][0]['amount'] = 520000
+        self.assertAlmostEqual(project(plan)['retirement_obligations'], 50000)
+
+    def test_disabled_purchase_with_stale_references_is_ignored(self):
+        stale = dict(id='move', name='Move', amount=1, month=2, enabled=False,
+                     sell_account_id='gone', payoff_debt_id='gone', sell_purchase_id='gone')
+        self.assertEqual(project(self.plan(future_purchases=[stale]))['annual'], project(self.plan())['annual'])
+
+    def test_an_asset_can_be_sold_only_once(self):
+        plan = self.plan(accounts=[dict(id='invest', type='investment', balance=200000, return_rate=0),
+                                   dict(id='house', type='property', balance=300000, return_rate=0)],
+            future_purchases=[dict(id='a', name='A', amount=1, month=2, sell_account_id='house'),
+                              dict(id='b', name='B', amount=1, month=3, sell_account_id='house')])
+        with self.assertRaisesRegex(ValueError, 'only one future purchase'):
+            project(plan)
+        plan['future_purchases'][1]['enabled'] = False
+        project(plan)
+        homes = [dict(id='h', name='Home', amount=10, month=1, adds_asset=True),
+                 dict(id='a', name='A', amount=1, month=2, sell_purchase_id='h'),
+                 dict(id='b', name='B', amount=1, month=3, sell_purchase_id='h')]
+        with self.assertRaisesRegex(ValueError, 'only one future purchase'):
+            project(self.plan(future_purchases=homes))
+
+    def test_later_purchase_sells_an_earlier_purchased_home_and_repays_its_loan(self):
+        starter = dict(id='starter', name='Starter', amount=300000, month=2, loan_amount=200000, loan_rate=0,
+                       loan_months=200, adds_asset=True, asset_return=0, annual_upkeep=1200)
+        upsize = dict(id='upsize', name='Upsize', amount=500000, month=12, loan_amount=400000, loan_rate=0,
+                      loan_months=400, adds_asset=True, sell_purchase_id='starter', sell_cost_rate=.05)
+        result = project(self.plan(accounts=[dict(type='investment', balance=600000, return_rate=0)],
+                                   future_purchases=[starter, upsize]))
+        before, moved, after = result['monthly'][10], result['monthly'][11], result['monthly'][12]
+        self.assertAlmostEqual(moved['purchase_sale_proceeds'], 285000)
+        self.assertAlmostEqual(moved['purchase_sale_costs'], 15000)
+        # Nine payments of 1,000 (months 3-11) and the regular month-12 payment precede the payoff.
+        self.assertAlmostEqual(moved['purchase_debt_payoff'], 200000 - 10 * 1000)
+        self.assertAlmostEqual(moved['purchase_asset_value'], 500000)
+        self.assertAlmostEqual(moved['debt_balance'], 400000)
+        self.assertAlmostEqual(moved['net_worth'], before['net_worth'] - 15000 - 1000)
+        # The starter home's upkeep stops at the sale, so it never reaches the perpetual target.
+        self.assertEqual([r['purchase_upkeep'] for r in result['monthly'][2:12]], [100] * 9 + [0])
+        self.assertEqual(after['purchase_upkeep'], 0)
+        self.assertEqual(result['annual_desired_spending'], 12000)
+        for row in result['monthly']:
+            self.assertAlmostEqual(row['closing'], row['opening'] + row['gain'] - row['fees'] + row['income']
+                                   - row['funded_expenses'] - row['debt_payment'] + row['purchase_asset_added']
+                                   - row['purchase_sale_costs'], places=6)
+        with self.assertRaisesRegex(ValueError, 'only after the month'):
+            project(self.plan(future_purchases=[dict(starter, month=12), dict(upsize, month=12)]))
+        with self.assertRaisesRegex(ValueError, 'kept as an asset'):
+            project(self.plan(future_purchases=[dict(starter, adds_asset=False), upsize]))
 
     def test_purchase_validation(self):
         with self.assertRaisesRegex(ValueError, 'cannot exceed'):
@@ -294,12 +411,18 @@ class FuturePurchaseTests(unittest.TestCase):
             project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=1)] * 2))
         with self.assertRaisesRegex(ValueError, 'month'):
             project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=0)]))
+        with self.assertRaisesRegex(ValueError, 'one existing asset'):
+            project(self.plan(accounts=[dict(id='x', type='property', balance=1), dict(type='investment', balance=1)],
+                future_purchases=[dict(id='h', name='H', amount=1, month=1, adds_asset=True),
+                                  dict(id='a', name='A', amount=1, month=2, sell_account_id='x', sell_purchase_id='h')]))
+        with self.assertRaisesRegex(ValueError, 'loan_inflation'):
+            project(self.plan(future_purchases=[dict(id='a', name='A', amount=1, month=1, loan_inflation=2)]))
 
 
 class ChildPlanningTests(unittest.TestCase):
     def base(self):
         return dict(age=40, income=60, expenses=40, assets=1000, return_rate=0,
-                    withdrawal_rate=.04, horizon=3, valuation_date='2026-01-01',
+                    withdrawal_rate=.04, horizon=3, valuation_date='2025-12-31',
                     members=[dict(id='kid-1', name='A', birth_date='2010-06-01')],
                     child_accounts=[])
 
@@ -332,7 +455,10 @@ class ChildPlanningTests(unittest.TestCase):
         parent_only.pop('members')
         parent_only.pop('child_accounts')
         baseline = project(parent_only)
-        self.assertEqual(result['target'], baseline['target'])
+        # Retirement starts immediately here, so household-funded contributions are a finite
+        # retirement obligation added to the target; the child balances themselves are not.
+        self.assertAlmostEqual(result['retirement_obligations'], 2100)
+        self.assertAlmostEqual(result['target'], baseline['target'] + 2100)
         self.assertAlmostEqual(baseline['annual'][-1]['balance'] - result['annual'][-1]['balance'], 2100)
         self.assertAlmostEqual(sum(row['child_contributions'] for row in result['annual']), 2100)
         for account in plan['child_accounts']:
@@ -342,6 +468,23 @@ class ChildPlanningTests(unittest.TestCase):
         for row in external['annual']:
             self.assertAlmostEqual(row['balance'], baseline_by_year[row['year']])
         self.assertEqual(external['target'], baseline['target'])
+
+    def test_child_year_end_falls_in_december_after_a_mid_year_valuation(self):
+        plan = self.base()
+        plan.update(valuation_date='2026-09-30', assets=10000)
+        plan['child_accounts'] = [dict(id='c', name='529', type='529', beneficiary_id='kid-1', balance=1000,
+                                      return_rate=.1, annual_contribution=100, start_year=2026, end_year=2027)]
+        result = project(plan)
+        months = [row['month'] for row in result['monthly'] if row['child_contributions']]
+        # Month 1 is October, so December 2026 is month 3 and December 2027 is month 15.
+        self.assertEqual(months, [3, 15])
+        first = result['children']['child_accounts'][0]['annual'][0]
+        self.assertEqual(first['year'], 2026)
+        self.assertAlmostEqual(first['return_amount'], 1000 * (1.1 ** (3 / 12) - 1))
+        # A December valuation has no months left in its year, so the first year-end is the next one.
+        plan['valuation_date'] = '2025-12-31'
+        years = [row['year'] for row in project(plan)['children']['child_accounts'][0]['annual']]
+        self.assertEqual(years[0], 2026)
 
     def test_unaffordable_household_contribution_is_reported_unfunded(self):
         plan = self.base()
