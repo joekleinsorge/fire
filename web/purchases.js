@@ -142,8 +142,9 @@ function openPurchase(mode, id) {
 
   $('purchase-loan').value = row?.loan_amount ?? 0;
   $('purchase-loan-rate').value = ((row?.loan_rate ?? .06) * 100).toFixed(2);
-  // Loans saved before inflation was asked for were modelled with none; new loans default to 2.5%.
-  $('purchase-loan-inflation').value = ((row?.loan_amount ? row.loan_inflation ?? 0 : .025) * 100).toFixed(1);
+  // Blank uses the plan's expected inflation.
+  $('purchase-loan-inflation').value = row?.loan_inflation == null ? '' : (row.loan_inflation * 100).toFixed(1);
+  $('purchase-loan-inflation').placeholder = `Plan default (${pct(plan.inflation_rate)})`;
   $('purchase-loan-years').value = Math.round((row?.loan_months ?? 360) / 12);
   $('purchase-sell').innerHTML = purchaseSaleOptions(plan, row?.id);
   $('purchase-sell').value = row?.sell_account_id ? `account:${row.sell_account_id}` : row?.sell_purchase_id ? `purchase:${row.sell_purchase_id}` : '';
@@ -195,7 +196,7 @@ function readPurchaseRow(forPreview = false) {
   if (loan) {
     row.loan_amount = loan;
     row.loan_rate = Number($('purchase-loan-rate').value) / 100;
-    row.loan_inflation = Number($('purchase-loan-inflation').value) / 100;
+    if ($('purchase-loan-inflation').value.trim()) row.loan_inflation = Number($('purchase-loan-inflation').value) / 100;
     row.loan_months = Number($('purchase-loan-years').value) * 12;
   }
   const sale = $('purchase-sell').value, split = sale.indexOf(':');

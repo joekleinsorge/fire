@@ -13,3 +13,4 @@
 .timing-field{border:0;padding:0;margin:0;display:flex;flex-direction:column;justify-content:flex-start;align-self:start;gap:6px;min-width:0}
 .timing-field{margin-bottom:10px}.timing-field legend{padding:0;margin-bottom:5px;font-size:10px;font-weight:600;color:#596b63}
 .timing-field select,.timing-field input{flex:none;width:100%;min-width:0}
+.inline-toggle{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:10px;font-weight:600;color:var(--green)}.inline-toggle input{width:auto;margin:0}

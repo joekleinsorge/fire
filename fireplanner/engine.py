@@ -149,7 +149,13 @@ def _family_adapter(plan, p, retirement_year=None):
                  dict(kind='expense', amount=p['expenses'], start_month=12, every_months=12)])
 
 
+def _plan_inflation(plan):
+    # Plan-wide expected inflation; debts and purchase loans use it unless they set their own.
+    return number(plan.get('inflation_rate', 0), 'inflation_rate', -.5, 1)
+
+
 def _purchases(plan):
+    inflation = _plan_inflation(plan)
     rows = plan.get('future_purchases', [])
     if not isinstance(rows, list) or len(rows) > 200 or any(not isinstance(row, dict) for row in rows):
         raise ValueError('future_purchases must be a bounded list of objects')
@@ -181,7 +187,7 @@ def _purchases(plan):
             loan_rate=number(row.get('loan_rate', 0), 'loan_rate', 0, 10),
             # loan_rate is the quoted (nominal) rate; loan_inflation converts its fixed
             # payments into this engine's constant purchasing power.
-            loan_inflation=number(row.get('loan_inflation', 0), 'loan_inflation', -.5, 1),
+            loan_inflation=number(row.get('loan_inflation', inflation), 'loan_inflation', -.5, 1),
             loan_months=number(row.get('loan_months', 360), 'loan_months', 1, 1800, True),
             adds_asset=adds_asset,
             asset_return=number(row.get('asset_return', 0), 'asset_return', -.99, 10),
@@ -277,7 +283,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         payment = balance * nominal / (1 - (1 + nominal) ** -months) if nominal else balance / months
         if debt.get('payment') is not None:
             payment = number(debt['payment'], 'debt payment', 0, 1e15)
-        deflator = (1 + number(debt.get('inflation_rate', 0), 'debt inflation_rate', -.5, 1)) ** (1 / 12)
+        deflator = (1 + number(debt.get('inflation_rate', _plan_inflation(plan)), 'debt inflation_rate', -.5, 1)) ** (1 / 12)
         debt_rows.append(dict(balance=balance, rate=_real_rate(nominal, deflator), payment=payment, deflator=deflator,
             extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance))
     initial_debt = sum(d['balance'] for d in debt_rows)

@@ -332,6 +332,19 @@ class FuturePurchaseTests(unittest.TestCase):
         fixed = project(self.plan(debts=[dict(debt, payment=500)]))
         self.assertAlmostEqual(fixed['monthly'][2]['debt_payment'], 500 / deflator ** 3)
 
+    def test_plan_inflation_is_the_default_for_debts_and_loans(self):
+        debt = dict(id='m', balance=12000, annual_rate=.06, months=12)
+        loan = dict(id='car', name='Car', amount=10000, month=1, loan_amount=10000, loan_rate=.06, loan_months=12)
+        planwide = project(self.plan(inflation_rate=.03, debts=[debt], future_purchases=[loan]))
+        explicit = project(self.plan(debts=[dict(debt, inflation_rate=.03)],
+                                     future_purchases=[dict(loan, loan_inflation=.03)]))
+        self.assertEqual(planwide['annual'], explicit['annual'])
+        # A row's own value wins over the plan's.
+        override = project(self.plan(inflation_rate=.03, debts=[dict(debt, inflation_rate=0)]))
+        self.assertAlmostEqual(override['monthly'][2]['debt_payment'], 12000 * .005 / (1 - 1.005 ** -12))
+        with self.assertRaisesRegex(ValueError, 'inflation_rate'):
+            project(self.plan(inflation_rate=2))
+
     def test_debt_payments_and_purchases_after_retirement_join_target(self):
         baseline = project(self.plan())
         # 24 months at 500 a month; retirement starts in month 13, so 12 payments remain.
