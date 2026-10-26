@@ -10,3 +10,6 @@
 .purchase-advanced{grid-column:1/-1;border:1px solid var(--line);border-radius:7px;padding:10px 12px;margin:2px 0 10px;background:#fbfcfa}.purchase-advanced summary{cursor:pointer;font-size:11px;font-weight:600;color:var(--forest)}.purchase-advanced[open] summary{margin-bottom:12px}
 .muted-text{color:var(--muted)}
 .notice .link-button{font-size:12px;padding:0 2px;text-decoration:underline}
+.timing-field{border:0;padding:0;margin:0;display:flex;flex-direction:column;justify-content:flex-start;align-self:start;gap:6px;min-width:0}
+.timing-field{margin-bottom:10px}.timing-field legend{padding:0;margin-bottom:5px;font-size:10px;font-weight:600;color:#596b63}
+.timing-field select,.timing-field input{flex:none;width:100%;min-width:0}

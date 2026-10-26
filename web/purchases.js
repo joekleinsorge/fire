@@ -2,21 +2,8 @@
 let purchaseEditId = null, purchaseMode = 'fork', purchaseBase = null, purchaseBaseFingerprint = null;
 
 // Purchases store a month offset from the plan baseline; the dialog edits it as a calendar month.
-function baselineParts(p = plan) {
-  return String(p.valuation_date || valuationDate()).split('-').map(Number);
-}
-function purchaseMonthLabel(month, p = plan) {
-  const [y, m] = baselineParts(p);
-  return new Date(y, m - 1 + Number(month), 1).toLocaleDateString(undefined, {month: 'short', year: 'numeric'});
-}
-function offsetToMonth(offset, p = plan) {
-  const [y, m] = baselineParts(p), d = new Date(y, m - 1 + Number(offset), 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-function monthToOffset(value, p = plan) {
-  const [y, m] = baselineParts(p), [vy, vm] = String(value).split('-').map(Number);
-  return (vy - y) * 12 + (vm - m);
-}
+// offsetToMonth, monthToOffset and monthLabel are shared from app.js.
+const purchaseMonthLabel = (month, p = plan) => monthLabel(month, p);
 function plural(n, word) {
   return `${n} ${word}${Math.abs(n) === 1 ? '' : 's'}`;
 }
