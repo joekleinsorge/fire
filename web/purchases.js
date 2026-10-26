@@ -361,16 +361,6 @@ $('purchase-form').onsubmit = async e => {
   }
 };
 
-function tellWithUndo(message, undo) {
-  tell(message);
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'link-button';
-  button.textContent = 'Undo';
-  button.onclick = () => { button.disabled = true; undo(); };
-  $('notice').append(' ', button);
-}
-
 async function removePurchase(id) {
   const previous = structuredClone(plan), fingerprint = JSON.stringify(plan);
   const candidate = planWithPurchase(plan, id, false);
@@ -379,7 +369,7 @@ async function removePurchase(id) {
   await acceptPurchasePlan(candidate, fingerprint);
   const removed = JSON.stringify(plan);
   const note = sellers.length ? ` ${sellers.map(r => `“${r.name}”`).join(', ')} no longer sells it.` : '';
-  tellWithUndo(`Purchase removed and forecast recalculated.${note}`, async () => {
+  tellAction(`Purchase removed and forecast recalculated.${note}`, 'Undo', async () => {
     try {
       if (JSON.stringify(plan) !== removed) throw Error('Your plan changed after the removal, so it can no longer be undone.');
       await acceptPurchasePlan(previous, removed);
