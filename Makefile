@@ -9,3 +9,4 @@ check: test
 	node --check web/children.js
 	node --check web/purchases.js
 	node --check web/whatif.js
+	node --check web/charts.js

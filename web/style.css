@@ -26,3 +26,20 @@
 .whatif-result .better strong{color:#28675e}
 .whatif-grid label{font-size:11px;font-weight:600;color:#596b63;margin:0}
 .whatif-grid small{display:block;font-size:9.5px;font-weight:400;color:var(--muted)}
+.wealth-panel{margin-top:18px}
+.wealth-panel{--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--series-5:#e87ba4;--series-6:#008300;--series-other:#a3aca7}
+.milestones{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+.milestones div{border:1px solid var(--line);border-radius:7px;padding:10px 12px;font-size:10px;color:var(--muted)}
+.milestones strong{display:block;font-size:17px;color:var(--ink);margin:2px 0;font-variant-numeric:tabular-nums}
+.milestones small{display:block;font-size:9.5px;line-height:1.35}
+.milestones .reached strong{color:var(--forest)}
+.wealth-chart{position:relative}
+.wealth-chart svg{width:100%;height:auto;display:block}
+.wealth-tip{position:absolute;pointer-events:none;background:#fff;border:1px solid var(--line);border-radius:7px;box-shadow:0 4px 14px rgba(25,45,42,.12);padding:8px 10px;font-size:10px;color:var(--ink);min-width:170px;z-index:2}
+.wealth-tip b{display:block;margin-bottom:4px}
+.wealth-tip span{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.wealth-tip i,.wealth-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.wealth-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:10px;color:#596b63}
+.wealth-legend .line-key{width:14px;height:2px;border-radius:1px;background:var(--ink);vertical-align:3px}
+.wealth-legend strong{color:var(--ink);font-weight:600;margin-left:4px;font-variant-numeric:tabular-nums}
+.wealth-tip em{font-style:normal}
