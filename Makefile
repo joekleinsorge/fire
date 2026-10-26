@@ -11,3 +11,4 @@ check: test
 	node --check web/whatif.js
 	node --check web/charts.js
 	node --check web/healthcare.js
+	node --check web/progress.js
