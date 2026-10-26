@@ -2,7 +2,7 @@
 let purchaseEditId = null, purchaseMode = 'fork', purchaseBase = null, purchaseBaseFingerprint = null;
 
 // Purchases store a month offset from the plan baseline; the dialog edits it as a calendar month.
-// offsetToMonth, monthToOffset and monthLabel are shared from app.js.
+// offsetToMonth, monthToOffset and monthLabel are shared from timing.js.
 const purchaseMonthLabel = (month, p = plan) => monthLabel(month, p);
 function plural(n, word) {
   return `${n} ${word}${Math.abs(n) === 1 ? '' : 's'}`;
