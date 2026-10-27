@@ -72,6 +72,19 @@ class TaxTests(unittest.TestCase):
                 places=4,
             )
 
+    def test_tax_efficient_order_defers_pretax_draws(self):
+        accounts = [
+            dict(id="ira", type="retirement", balance=200000, return_rate=0, available=True, tax_treatment="pretax"),
+            dict(id="cash", type="cash", balance=30000, return_rate=0, available=True, tax_treatment="cash"),
+        ]
+        spend = [dict(kind="expense", amount=4000)]
+        listed = project(self.plan(accounts=accounts, streams=spend))
+        efficient = project(self.plan(accounts=accounts, streams=spend, withdrawal_order="tax_efficient"))
+        # Cash covers the first seven months untaxed before the pre-tax account is drawn.
+        self.assertEqual(efficient["monthly"][6]["accounts"][0], 200000)
+        self.assertEqual(efficient["monthly"][6]["withdrawal_taxes"], 0)
+        self.assertLess(efficient["summary"]["withdrawal_taxes"], listed["summary"]["withdrawal_taxes"])
+
     def test_basis_deposits_and_tax_year_reset(self):
         p = self.plan(
             valuation_date="2026-10-15",

@@ -2212,6 +2212,11 @@
           "surplus_account_id": {
             "type": "string"
           },
+          "withdrawal_order": {
+            "type": "string",
+            "enum": ["listed", "tax_efficient"],
+            "default": "listed"
+          },
           "archived_scenario_ids": {
             "type": "array",
             "items": {

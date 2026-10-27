@@ -208,6 +208,39 @@ class FullEngineTests(unittest.TestCase):
         self.assertEqual(result['monthly'][1]['available_balance'],20)
         self.assertEqual(result['monthly'][1]['balance'],120)
 
+    def test_tax_efficient_withdrawal_order(self):
+        accounts = [dict(type='retirement', balance=100000, return_rate=0, tax_treatment='roth_qualified'),
+                    dict(type='retirement', balance=100000, return_rate=0, tax_treatment='pretax'),
+                    dict(type='investment', balance=100000, return_rate=0, tax_treatment='taxable'),
+                    dict(type='cash', balance=10000, return_rate=0)]
+        spend = [dict(kind='expense', amount=6000)]
+        listed = project(self.plan(accounts=accounts, streams=spend))
+        efficient = project(self.plan(accounts=accounts, streams=spend, withdrawal_order='tax_efficient'))
+        # Listed order spends the Roth first; tax-efficient spends cash, then taxable, then pre-tax.
+        self.assertLess(listed['monthly'][0]['accounts'][0], 100000)
+        self.assertEqual(efficient['monthly'][0]['accounts'][0], 100000)
+        self.assertEqual(efficient['monthly'][0]['accounts'][3], 4000)
+        self.assertEqual(efficient['monthly'][1]['accounts'][2], 98000)
+        self.assertEqual(efficient['monthly'][1]['accounts'][1], 100000)
+        self.assertEqual(efficient['summary']['ending_assets'], listed['summary']['ending_assets'])
+        with self.assertRaisesRegex(ValueError, 'withdrawal_order'):
+            project(self.plan(withdrawal_order='random'))
+
+    def test_tax_efficient_order_ranks_untreated_accounts_by_type(self):
+        accounts = [dict(type='retirement', balance=1000, return_rate=0),
+                    dict(type='investment', balance=1000, return_rate=0),
+                    dict(type='cash', balance=1000, return_rate=0)]
+        result = project(self.plan(accounts=accounts, withdrawal_order='tax_efficient',
+                                   streams=[dict(kind='expense', amount=1500, end_month=2)]))
+        self.assertEqual(result['monthly'][0]['accounts'], [1000, 500, 0])
+
+    def test_tax_efficient_order_keeps_surplus_in_first_listed_account(self):
+        accounts = [dict(type='retirement', balance=0, return_rate=0, tax_treatment='pretax'),
+                    dict(type='cash', balance=0, return_rate=0)]
+        result = project(self.plan(accounts=accounts, withdrawal_order='tax_efficient',
+                                   streams=[dict(kind='income', amount=100, end_month=2)]))
+        self.assertEqual(result['monthly'][0]['accounts'], [100, 0])
+
     def test_unpaid_matured_debt_is_not_recounted_each_month(self):
         result=project(self.plan(accounts=[dict(balance=0)],debts=[dict(balance=1200,months=12)]))
         self.assertAlmostEqual(result['summary']['total_unfunded'],1200)
