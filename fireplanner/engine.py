@@ -8,6 +8,7 @@ from datetime import date
 import re
 from . import children as child_planning
 from . import taxes
+from . import social_security as ss_planning
 
 VERSION = '2.3.0'
 
@@ -272,7 +273,20 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     contribution_ends = [number(a.get('contribution_end_month', 1), 'contribution_end_month', 1, 1801, True) for a in accounts]
     inflation = number(plan.get('inflation_rate', 0), 'inflation_rate', 0, .5)
     inflation_monthly = (1 + inflation) ** (1 / 12)
-    tax_ledger = taxes.TaxLedger(plan, accounts)
+    # Claimed benefits are level monthly income in today's dollars from the claim month.
+    # With the tax model they are gross Social Security income, taxed by provisional
+    # income; otherwise they are after-tax like any other stream.
+    social_security = [] if plan.get('_quick_adapter') else ss_planning.normalize(
+        plan, p['age'], p['horizon'] * 12, valuation, number)
+    tax_config = plan.get('tax_model') or {}
+    taxed = isinstance(tax_config, dict) and tax_config.get('enabled') is True
+    ss_streams = [dict(id='social-security:' + row['id'], name=row['name'], kind='income', amount=row['monthly_benefit'],
+                       start_month=row['start_month'], end_month=p['horizon'] * 12 + 1, every_months=1, growth_rate=0.0,
+                       enabled=row['enabled'], essential=True, tax_kind='social_security' if taxed else None)
+                  for row in social_security]
+    if ss_streams:
+        streams = list(streams) + ss_streams
+    tax_ledger = taxes.TaxLedger(dict(plan, streams=streams), accounts)
     for i, a in enumerate(accounts):
         if is_personal_asset(a) and (access_ages[i] is not None or payroll_deposits[i] or household_deposits[i]):
             raise ValueError('personal assets cannot have spending access or payroll contributions')
@@ -757,7 +771,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         rmd_gross=sum(r['rmd_gross'] for r in annual),tax_refund_income=sum(r['tax_refund_income'] for r in annual),
         retirement_balance=retirement_balance, retirement_available_balance=retirement_available_balance,
         spending_strategy=strategy, lowest_spending_factor=lowest_spending_factor, **target_fields)
-    return dict(**target_fields, tax_analysis=tax_ledger.report(), children=children, future_purchases=purchases, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
+    return dict(**target_fields, tax_analysis=tax_ledger.report(), children=children, future_purchases=purchases, social_security=social_security, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
         accumulation_shortfall=accumulation_shortfall,
         portfolio_survives=retirement_survives if has_window else None,
         essential_spending_funded=retirement_essential if has_window else None,
@@ -768,7 +782,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             'Nominal loans use entered inflation to express future payments and balances in plan-start purchasing power.',
             'Underfunded purchases add only funded cost to asset value; a partial value does not mean a purchase can close.',
             'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
-            'Property and other asset values use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt.'])
+            'Property and other asset values use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt.']
+            + (['Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars. With the tax model it is taxed as Social Security income; otherwise it is treated as after tax. The earnings test and spousal or survivor benefits are not modeled.'] if social_security else []))
 
 
 def _percentile(values, p):
