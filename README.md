@@ -18,12 +18,13 @@ For Docker, run `docker compose up --build` and open the same URL. The Compose v
 
 - Six-input quick FI estimate with linked income, expense, savings, monthly-savings, and savings-rate edits, plus a savings-rate chart and annual table. The estimate can expand into a detailed plan.
 - Overview with net worth, spendable-asset progress, retirement spending target, projected FI timing, cash flow health, an asset projection, and annual details.
+- A plan checkup on the overview: rule-of-thumb health checks (emergency fund, high-interest debt, savings rate, fees, withdrawal rate and order, Social Security) and common moves (save more, trim flexible spending, retire a year later, lower fees, extra debt payments, invest excess cash, tax-efficient withdrawals, claim Social Security at 70), each projected on a copy of the plan and ranked by the years it brings FI forward, with apply and undo.
 - Editable cash, investment, retirement, property, and other assets; withdrawal order; and amortizing debts.
 - Recurring after-tax income and expense schedules with cadence, start/end months, real growth, essential status, and pause controls.
 - Retirement assumptions and seeded simulations with annual percentile bands and separate essential-spending, desired-lifestyle, and portfolio-survival outcomes.
 - Saved plans with revisions, scenarios, comparisons, progress observations, and JSON import/export. CSV export and browser printing are also available.
 - Child profiles with separate 529 education and Trump Account forecasts; child assets stay outside a parent's spendable balance and FI target, while household-funded contributions reduce household cash flow.
-- Future purchases (a pool, a new home, tuition) with one-time cost, ongoing or time-limited upkeep, optional financing, a resulting property asset, and sale of an existing home with mortgage payoff, plus purchase scenarios that save a full plan copy with its baseline for side-by-side comparison.
+- Future purchases (a pool, a new home, tuition) with one-time cost, ongoing or time-limited upkeep, optional financing at a quoted rate adjusted for inflation, a resulting property asset, sale of an existing home (or one bought by an earlier purchase) with mortgage payoff, a per-purchase effect on FI age, plus purchase scenarios that save a full plan copy with its baseline for side-by-side comparison.
 - Local accounts, household isolation, and role-based plan access.
 
 ## Model boundaries

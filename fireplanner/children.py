@@ -95,14 +95,16 @@ def project(plan, horizon, initialize_only=False):
 
     valuation_date = plan.get('valuation_date')
     if valuation_date is None:
-        first_year = date.today().year
+        valuation = date.today()
     else:
         if not isinstance(valuation_date, str):
             raise ValueError('valuation_date must be an ISO calendar date')
         try:
-            first_year = date.fromisoformat(valuation_date).year
+            valuation = date.fromisoformat(valuation_date)
         except ValueError:
             raise ValueError('valuation_date must be a real calendar date') from None
+    # The valuation month is already closed; a December valuation leaves nothing of its year.
+    first_year = valuation.year + (1 if valuation.month == 12 else 0)
     years = range(first_year, first_year + horizon)
 
     accounts = []
