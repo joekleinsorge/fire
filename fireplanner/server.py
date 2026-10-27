@@ -328,7 +328,13 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
         do_PATCH=handle_request
         do_DELETE=handle_request
 
-    server=ThreadingHTTPServer((host,port),Handler)
+    class Server(ThreadingHTTPServer):
+        # The stdlib default backlog of 5 resets connections when a browser opens the
+        # page's stylesheet and scripts in parallel.
+        request_queue_size=128
+        daemon_threads=True
+
+    server=Server((host,port),Handler)
     server.store=store
     server.worker=Worker(store) if workers else None
     return server
