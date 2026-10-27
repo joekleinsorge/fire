@@ -59,6 +59,7 @@ function fillAssumptions() {
     f.elements.roth_end.value = t.roth_conversion?.end_age ?? 72;
     syncTaxFields();
   }
+  f.elements.withdrawal_order.value = plan.withdrawal_order === 'tax_efficient' ? 'tax_efficient' : 'listed';
   f.elements.inflation_rate.value = ((+plan.inflation_rate || 0) * 100).toFixed(1);
   f.elements.withdrawal_rate.value = (+plan.withdrawal_rate * 100).toFixed(1);
   $('currency-display').value = plan.currency || 'USD';
@@ -147,6 +148,8 @@ $('assumptions-form').onsubmit = e => {
         : {}),
     };
   else delete plan.tax;
+  if (d.get('withdrawal_order') === 'tax_efficient') plan.withdrawal_order = 'tax_efficient';
+  else delete plan.withdrawal_order;
   touch();
   if (plan.tax?.roth_conversion && !(plan.accounts || []).some(a => a.tax_treatment === 'roth'))
     tell('Roth conversions need a Roth account to receive them. Add one under Accounts & debts.', true);

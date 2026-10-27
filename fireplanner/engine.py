@@ -358,7 +358,7 @@ def _flag(row, key, default):
 class _Ledger:
     """Account balances in withdrawal order plus the current month's household cash."""
 
-    def __init__(self, accounts, p):
+    def __init__(self, accounts, p, order='listed'):
         self.balances = [number(a.get('balance', 0), 'account balance', 0, 1e15) for a in accounts]
         self.rates = [number(a.get('return_rate', p['return_rate']), 'account return', -.999999999, 10) for a in accounts]
         self.fees = [number(a.get('fee_rate', 0), 'fee_rate', 0, .99) for a in accounts]
@@ -375,8 +375,12 @@ class _Ledger:
         self.owners = ['self'] * len(accounts)
         self.federal = None
         self.market = [a.get('type', 'investment') in ('investment', 'retirement') for a in accounts]
-        # Income is available immediately; withdrawals follow the user's account order.
+        # Income is available immediately; withdrawals follow the user's account order, or with
+        # a tax-efficient order: cash and after-tax, then taxable, then pre-tax, then Roth.
         self.available = [i for i, open_ in enumerate(accessible) if open_]
+        if order == 'tax_efficient':
+            rank = dict(after_tax=0, taxable=1, pre_tax=2, roth=3)
+            self.available.sort(key=lambda i: rank[self.treatments[i]])
         self.count = len(accounts)
         self.cash = self.withdrawal_tax = 0.0
 
@@ -827,7 +831,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     children = child_planning.project(plan, p['horizon'], initialize_only=True)
     valuation = date.fromisoformat(plan['valuation_date']) if plan.get('valuation_date') else date.today()
     accounts, streams, debts = _plan_lists(plan)
-    ledger = _Ledger(accounts, p)
+    order = plan.get('withdrawal_order', 'listed')
+    if order not in ('listed', 'tax_efficient'):
+        raise ValueError('withdrawal_order must be listed or tax_efficient')
+    ledger = _Ledger(accounts, p, order)
     initial = sum(ledger.balances)
     normalized = _streams(streams, p)
     household, social_security, survivor_from = _household_income(plan, p, streams, normalized, valuation)

@@ -709,6 +709,22 @@ class FederalTaxModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'bracket'):
             project(dict(plan, tax=dict(rule, roth_conversion=dict(fill_to=.15))))
 
+    def test_tax_efficient_withdrawal_order(self):
+        accounts = [dict(type='retirement', balance=100000, return_rate=0, tax_treatment='roth'),
+                    dict(type='retirement', balance=100000, return_rate=0, tax_treatment='pre_tax'),
+                    dict(type='investment', balance=100000, return_rate=0, tax_treatment='taxable'),
+                    dict(type='cash', balance=10000, return_rate=0)]
+        listed = project(self.plan(tax=None, accounts=accounts))
+        efficient = project(self.plan(tax=None, accounts=accounts, withdrawal_order='tax_efficient'))
+        # Listed order spends the Roth first; tax-efficient spends cash, then taxable.
+        self.assertLess(listed['monthly'][0]['accounts'][0], 100000)
+        self.assertEqual(efficient['monthly'][0]['accounts'][0], 100000)
+        self.assertLess(efficient['monthly'][0]['accounts'][3], 10000)
+        self.assertEqual(efficient['monthly'][2]['accounts'][1], 100000)
+        self.assertLess(efficient['monthly'][2]['accounts'][2], 100000)
+        with self.assertRaisesRegex(ValueError, 'withdrawal_order'):
+            project(self.plan(withdrawal_order='random'))
+
     def test_invalid_tax_settings(self):
         with self.assertRaisesRegex(ValueError, 'tax model'):
             project(self.plan(tax=dict(model='state')))
