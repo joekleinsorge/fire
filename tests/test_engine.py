@@ -668,6 +668,25 @@ class FederalTaxModelTests(unittest.TestCase):
         flat = project(self.plan(tax=None))
         self.assertLess(result['target'], flat['target'])
 
+    def test_roth_conversions_fill_the_chosen_bracket(self):
+        from fireplanner.federal_tax import ordinary_taxable_income
+        rule = dict(model='federal_2026', filing_status='single', roth_conversion=dict(fill_to=.12, start_age=60, end_age=70))
+        plan = self.plan(age=60, retirement_age=60, tax=rule, streams=[dict(kind='expense', amount=2000)],
+            accounts=[dict(type='investment', balance=500000, return_rate=0, tax_treatment='after_tax'),
+                      dict(type='retirement', balance=800000, return_rate=0, tax_treatment='pre_tax'),
+                      dict(type='retirement', balance=0, return_rate=0, tax_treatment='roth')])
+        result = project(plan)
+        december = result['monthly'][11]
+        # Spending comes from the after-tax account, so the whole 12% bracket is converted.
+        self.assertAlmostEqual(ordinary_taxable_income('single', december['roth_conversion'], 0, 0), 50400, places=4)
+        self.assertAlmostEqual(december['roth_conversion'], 50400 + 16100, places=4)
+        self.assertAlmostEqual(december['accounts'][2], 66500, places=4)
+        # Conversions stop once the age window ends.
+        late = project(dict(plan, tax=dict(rule, roth_conversion=dict(fill_to=.12, start_age=55, end_age=59))))
+        self.assertEqual(sum(row['roth_conversion'] for row in late['monthly']), 0)
+        with self.assertRaisesRegex(ValueError, 'bracket'):
+            project(dict(plan, tax=dict(rule, roth_conversion=dict(fill_to=.15))))
+
     def test_invalid_tax_settings(self):
         with self.assertRaisesRegex(ValueError, 'tax model'):
             project(self.plan(tax=dict(model='state')))

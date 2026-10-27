@@ -70,6 +70,36 @@ def annual_tax(status, ordinary, gains, benefits, aged=0, state_rate=0.0, thresh
     return ordinary_tax(status, ordinary_taxable) + .15 * at_15 + .20 * at_20 + state_rate * taxable
 
 
+def ordinary_taxable_income(status, ordinary, gains, benefits, aged=0, threshold_scale=1.0):
+    """Taxable ordinary income: ordinary income plus taxable benefits, less the deduction."""
+    rules = RULES[status]
+    income = ordinary + taxable_social_security(status, ordinary + gains, benefits, threshold_scale)
+    return max(0.0, income - rules['deduction'] - aged * rules['aged_addition'])
+
+
+def bracket_top(status, rate):
+    """Upper edge of taxable income for the bracket with this rate."""
+    for ceiling, bracket_rate in RULES[status]['brackets']:
+        if abs(bracket_rate - rate) < 1e-9:
+            return ceiling
+    raise ValueError('roth conversion bracket must be one of the federal rates')
+
+
+def conversion_to_fill(status, rate, ordinary, gains, benefits, available, aged=0, threshold_scale=1.0):
+    """Largest conversion (up to `available`) keeping taxable ordinary income within the bracket."""
+    top = bracket_top(status, rate)
+    fits = lambda amount: ordinary_taxable_income(status, ordinary + amount, gains, benefits, aged, threshold_scale) <= top
+    if fits(available):
+        return available
+    if not fits(0.0):
+        return 0.0
+    low, high = 0.0, available
+    for _ in range(60):
+        middle = (low + high) / 2
+        low, high = (middle, high) if fits(middle) else (low, middle)
+    return low
+
+
 # IRS Publication 590-B, Appendix B, Table III (Uniform Lifetime), from age 72.
 UNIFORM_LIFETIME = (27.4, 26.5, 25.5, 24.6, 23.7, 22.9, 22.0, 21.1, 20.2, 19.4, 18.5, 17.7, 16.8,
                     16.0, 15.2, 14.4, 13.7, 12.9, 12.2, 11.5, 10.8, 10.1, 9.5, 8.9, 8.4, 7.8, 7.3,

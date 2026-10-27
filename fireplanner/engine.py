@@ -287,8 +287,19 @@ def _tax_model(plan, household):
     status = rule.get('filing_status', 'married_joint' if household['couple'] else 'single')
     if status not in federal_tax.FILING_STATUSES:
         raise ValueError('filing_status must be single or married_joint')
+    conversion = rule.get('roth_conversion')
+    if conversion is not None:
+        if not isinstance(conversion, dict):
+            raise ValueError('roth_conversion must be an object')
+        fill_to = number(conversion.get('fill_to'), 'roth conversion bracket', 0, 1)
+        federal_tax.bracket_top(status, fill_to)
+        start = number(conversion.get('start_age', household['ages']['self']), 'roth conversion start_age', 0, 150, True)
+        end = number(conversion.get('end_age', 74), 'roth conversion end_age', 0, 150, True)
+        if end < start:
+            raise ValueError('roth conversion end_age must be at or after start_age')
+        conversion = dict(fill_to=fill_to, start_age=start, end_age=end)
     return dict(status=status, state_rate=number(rule.get('state_rate', 0), 'state_rate', 0, .2),
-                gain_share=number(rule.get('gain_share', .5), 'gain_share', 0, 1))
+                gain_share=number(rule.get('gain_share', .5), 'gain_share', 0, 1), roth_conversion=conversion)
 
 
 def _spending_strategy(plan):
@@ -410,6 +421,7 @@ class _Ledger:
                 rmd += take
         status = 'married_joint' if married and model['status'] == 'married_joint' else 'single'
         aged = sum(1 for who, age in ages.items() if who != '_birth_years' and age is not None and age >= 65)
+        converted = self.convert_to_roth(status, ages, aged, threshold_scale)
         o, g, b = self.ytd['ordinary'], self.ytd['gains'], self.ytd['benefits']
         tax = lambda o, g: federal_tax.annual_tax(status, o, g, b, aged, model['state_rate'], threshold_scale)
         owed = tax(o, g)
@@ -422,7 +434,26 @@ class _Ledger:
                                    self.gain_shares[i] * gains_rate if treatment == 'taxable' and i < self.count else 0.0)
         self.ytd = dict(ordinary=0.0, gains=0.0, benefits=0.0, withheld=0.0)
         self.taken = [0.0] * len(self.balances)
-        return rmd, due
+        return rmd, due, converted
+
+    def convert_to_roth(self, status, ages, aged, threshold_scale):
+        """Move pre-tax savings into the first Roth account up to the top of a bracket."""
+        rule = self.federal['roth_conversion']
+        age = ages.get('self')
+        roth = next((i for i in range(self.count) if self.treatments[i] == 'roth'), None)
+        if rule is None or roth is None or age is None or not rule['start_age'] <= age <= rule['end_age']:
+            return 0.0
+        sources = [i for i in range(self.count) if self.treatments[i] == 'pre_tax']
+        amount = federal_tax.conversion_to_fill(status, rule['fill_to'], self.ytd['ordinary'], self.ytd['gains'],
+            self.ytd['benefits'], sum(self.balances[i] for i in sources), aged, threshold_scale)
+        remaining = amount
+        for i in sources:
+            moved = min(self.balances[i], remaining)
+            self.balances[i] -= moved
+            self.balances[roth] += moved
+            remaining -= moved
+        self.ytd['ordinary'] += amount
+        return amount
 
     def tax_mix(self):
         """Shares of available balances that are pre-tax and that are taxable gains."""
@@ -815,7 +846,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_available_balance = initial_available if retirement_month == 0 else None
     retirement_tax_rate = ledger.blended_tax_rate() if retirement_month == 0 else None
     retirement_mix = ledger.tax_mix() if tax_model and retirement_month == 0 else None
-    annual_sums = _ANNUAL_SUMS + (('tax_true_up', 'tax_unpaid', 'rmd') if tax_model else ())
+    annual_sums = _ANNUAL_SUMS + (('tax_true_up', 'tax_unpaid', 'rmd', 'roth_conversion') if tax_model else ())
     retirement_survives = retirement_essential = retirement_desired = True
     accumulation_shortfall = total_unfunded = 0.0
     first_shortfall = None
@@ -875,7 +906,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 row['balance'] = row['principal']
         purchase_loan_drawn = sum(item['loan_amount'] for item in purchases if item['enabled'] and item['month'] == month)
         asset_value = sum(a['value'] for a in purchase_assets.values())
-        rmd = tax_due = tax_unpaid = 0.0
+        rmd = tax_due = tax_unpaid = converted = 0.0
         if tax_model and (valuation.month + month) % 12 == 0:
             year = valuation.year + (valuation.month + month - 1) // 12
             alive = lambda who: household['deaths'].get(who) is None or household['deaths'][who] > month
@@ -883,7 +914,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             ages['_birth_years'] = birth_years
             first = household['first_death']
             married = household['couple'] and (first is None or first[0] > month - 12)
-            rmd, tax_due = ledger.close_tax_year(year, ages, married, (1 + inflation) ** -(year - 2026))
+            rmd, tax_due, converted = ledger.close_tax_year(year, ages, married, (1 + inflation) ** -(year - 2026))
             # Tax is paid (or refunded) from household cash; any withdrawal it needs counts toward next year.
             if tax_due > 0:
                 _, tax_unpaid = ledger.pay(tax_due)
@@ -918,7 +949,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             withdrawal_tax=ledger.withdrawal_tax, available_after_tax=ledger.after_tax_value(),
             spending_factor=guardrails.factor if guardrails else 1.0)
         if tax_model:
-            row.update(tax_true_up=tax_due, tax_unpaid=tax_unpaid, rmd=rmd)
+            row.update(tax_true_up=tax_due, tax_unpaid=tax_unpaid, rmd=rmd, roth_conversion=converted)
 
         if month >= retirement_start:
             # Sale proceeds offset the costs they fund; payoffs from them are counted as paid.
@@ -994,6 +1025,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     warnings = ['Streams are after tax. Account withdrawals pay a flat per-account withdrawal_tax_rate, not statutory brackets. Unavailable accounts cannot fund spending.',
         'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
         'Property and other asset values use fixed assumed returns, default to unavailable for spending, and have no automatic sale or linked debt.']
+    if tax_model and tax_model['roth_conversion'] and 'roth' not in ledger.treatments:
+        warnings.append('Roth conversions are set but the plan has no Roth account to receive them, so none were made.')
     if social_security:
         warnings.append('Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars; taxation of benefits, the earnings test, and spousal or survivor benefits are not modeled.')
     return dict(**target_fields, children=children, future_purchases=purchases, social_security=social_security, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,

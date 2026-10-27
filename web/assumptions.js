@@ -54,6 +54,9 @@ function fillAssumptions() {
     f.elements.filing_status.value = t.filing_status || (plan.partner ? 'married_joint' : 'single');
     f.elements.state_rate.value = ((t.state_rate ?? 0) * 100).toFixed(1);
     f.elements.gain_share.value = Math.round((t.gain_share ?? 0.5) * 100);
+    f.elements.roth_fill.value = t.roth_conversion ? String(t.roth_conversion.fill_to) : '';
+    f.elements.roth_start.value = t.roth_conversion?.start_age ?? plan.retirement_age;
+    f.elements.roth_end.value = t.roth_conversion?.end_age ?? 72;
     syncTaxFields();
   }
   f.elements.inflation_rate.value = ((+plan.inflation_rate || 0) * 100).toFixed(1);
@@ -139,10 +142,15 @@ $('assumptions-form').onsubmit = e => {
       filing_status: d.get('filing_status'),
       state_rate: +d.get('state_rate') / 100,
       gain_share: +d.get('gain_share') / 100,
+      ...(d.get('roth_fill')
+        ? { roth_conversion: { fill_to: +d.get('roth_fill'), start_age: +d.get('roth_start'), end_age: +d.get('roth_end') } }
+        : {}),
     };
   else delete plan.tax;
   touch();
-  tell('Assumptions applied. Update the projection to recalculate.');
+  if (plan.tax?.roth_conversion && !(plan.accounts || []).some(a => a.tax_treatment === 'roth'))
+    tell('Roth conversions need a Roth account to receive them. Add one under Accounts & debts.', true);
+  else tell('Assumptions applied. Update the projection to recalculate.');
 };
 $('plan-name').oninput = e => {
   plan.name = e.target.value;
