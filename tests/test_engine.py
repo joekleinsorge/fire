@@ -583,6 +583,98 @@ class CoupleTests(unittest.TestCase):
             project(self.plan(partner=dict(age=58, life_expectancy=50)))
 
 
+class FederalTaxModelTests(unittest.TestCase):
+    """Valuation 2025-12-31 makes projection year 1 calendar 2026."""
+    def plan(self, **changes):
+        return dict(dict(age=66, retirement_age=66, horizon=3, return_rate=0, withdrawal_rate=.04,
+            valuation_date='2025-12-31', tax=dict(model='federal_2026', filing_status='single'),
+            accounts=[dict(type='retirement', balance=1000000, return_rate=0, tax_treatment='pre_tax')],
+            streams=[dict(kind='expense', amount=5000)]), **changes)
+
+    def test_december_true_up_settles_the_annual_tax(self):
+        from fireplanner.federal_tax import annual_tax
+        result = project(self.plan(streams=[dict(kind='expense', amount=3000)]))
+        year = result['monthly'][:12]
+        withheld = sum(row['withdrawal_tax'] for row in year)
+        # Withholding starts at the account's flat 22%; December settles the real tax.
+        self.assertAlmostEqual(year[0]['withdrawal_tax'], 3000 / .78 * .22)
+        taken = sum(row['withdrawal_tax'] for row in year) / .22
+        self.assertAlmostEqual(year[-1]['tax_true_up'], annual_tax('single', taken, 0, 0, aged=1) - withheld, places=6)
+        self.assertLess(year[-1]['tax_true_up'], 0)
+        # About 46,000 of withdrawals sits in the 12% bracket, so year 2 withholds 12%.
+        self.assertAlmostEqual(result['monthly'][12]['withdrawal_tax'] / (result['monthly'][12]['withdrawal_tax'] + 3000), .12)
+        for row in result['monthly']:
+            self.assertAlmostEqual(row['closing'], row['opening'] + row['gain'] - row['fees'] + row['income']
+                - row['funded_expenses'] - row['debt_payment'] - row['withdrawal_tax']
+                - (row['tax_true_up'] - row['tax_unpaid']), places=6)
+
+    def test_roth_withdrawals_owe_nothing(self):
+        result = project(self.plan(accounts=[dict(type='retirement', balance=1000000, return_rate=0, tax_treatment='roth')]))
+        self.assertEqual(sum(row['tax_true_up'] for row in result['monthly']), 0)
+        self.assertEqual(sum(row['withdrawal_tax'] for row in result['monthly']), 0)
+
+    def test_required_minimum_distributions_follow_table_iii(self):
+        # Born 1950 (age 76 in 2026); spending is covered by income, so the RMD is all that is taken.
+        plan = self.plan(age=75, streams=[dict(kind='income', amount=10000), dict(kind='expense', amount=5000)],
+            accounts=[dict(type='retirement', balance=1000000, return_rate=0, tax_treatment='pre_tax'),
+                      dict(type='investment', balance=0, return_rate=0)])
+        result = project(plan)
+        december = result['monthly'][11]
+        self.assertAlmostEqual(december['rmd'], 1000000 / 23.7)
+        # The distribution is reinvested outside the pre-tax account.
+        self.assertAlmostEqual(december['accounts'][0], 1000000 - 1000000 / 23.7)
+        self.assertGreater(december['accounts'][1], 1000000 / 23.7 - december['tax_true_up'] - 1)
+        # No RMD before the applicable age (75 for a 1960 birth).
+        young = project(dict(plan, age=66))
+        self.assertEqual(young['monthly'][11]['rmd'], 0)
+
+    def test_social_security_is_taxed_by_provisional_income(self):
+        from fireplanner.federal_tax import annual_tax
+        plan = self.plan(social_security=[dict(id='me', birth_year=1960, pia_at_fra=2500, claim_age_years=66)],
+                         accounts=[dict(type='retirement', balance=1000000, return_rate=0, tax_treatment='pre_tax')])
+        result = project(plan)
+        year = result['monthly'][:12]
+        benefits = sum(row['income'] for row in year)
+        withheld = sum(row['withdrawal_tax'] for row in year)
+        taken = withheld / .22
+        self.assertAlmostEqual(year[-1]['tax_true_up'], annual_tax('single', taken, 0, benefits, aged=1) - withheld, places=6)
+
+    def test_taxable_stream_income_and_capital_gains(self):
+        from fireplanner.federal_tax import annual_tax
+        plan = self.plan(tax=dict(model='federal_2026', filing_status='single', gain_share=.4),
+            accounts=[dict(type='investment', balance=1000000, return_rate=0, tax_treatment='taxable')],
+            streams=[dict(kind='income', amount=3000, taxable_share=1), dict(kind='expense', amount=5000)])
+        year = project(plan)['monthly'][:12]
+        withheld = sum(row['withdrawal_tax'] for row in year)
+        taken = sum(2000 / (1 - .1) for _ in year)
+        self.assertAlmostEqual(year[-1]['tax_true_up'], annual_tax('single', 36000, .4 * taken, 0, aged=1) - withheld, places=6)
+
+    def test_survivor_files_single_after_the_year_of_death(self):
+        from fireplanner.federal_tax import annual_tax
+        plan = self.plan(horizon=3, partner=dict(age=66, life_expectancy=67), tax=dict(model='federal_2026'))
+        rows = project(plan)['annual']
+        self.assertEqual(len(rows), 3)
+        # Year 2 (partner dies at the start of it) is joint; year 3 is single, so tax rises.
+        self.assertGreater(rows[2]['tax_true_up'] + rows[2]['withdrawal_tax'], rows[1]['tax_true_up'] + rows[1]['withdrawal_tax'])
+
+    def test_target_grosses_up_withdrawals_for_federal_tax(self):
+        from fireplanner.federal_tax import annual_tax
+        result = project(self.plan())
+        gross = 60000.0
+        for _ in range(100):
+            gross = 60000 + annual_tax('single', gross, 0, 0, aged=1)
+        self.assertAlmostEqual(result['target'], gross / .04, places=4)
+        self.assertAlmostEqual(result['target_tax_rate'], annual_tax('single', gross, 0, 0, aged=1) / gross)
+        flat = project(self.plan(tax=None))
+        self.assertLess(result['target'], flat['target'])
+
+    def test_invalid_tax_settings(self):
+        with self.assertRaisesRegex(ValueError, 'tax model'):
+            project(self.plan(tax=dict(model='state')))
+        with self.assertRaisesRegex(ValueError, 'filing_status'):
+            project(self.plan(tax=dict(model='federal_2026', filing_status='head')))
+
+
 class ChildPlanningTests(unittest.TestCase):
     def base(self):
         return dict(age=40, income=60, expenses=40, assets=1000, return_rate=0,

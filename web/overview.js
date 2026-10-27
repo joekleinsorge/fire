@@ -156,7 +156,7 @@ function renderAnnual() {
     .map(r => {
       const k = futureFactor(r.year),
         m = v => money((+v || 0) * k);
-      return `<tr><td>${r.year}</td><td>${r.age}</td><td>${m(r.balance)}</td><td>${m(r.debt_balance)}</td><td>${m(r.purchase_paid)}</td><td>${m((r.child_contributions || 0) + (r.child_education || 0))}</td><td>${m(r.unfunded)}</td></tr>`;
+      return `<tr><td>${r.year}</td><td>${r.age}</td><td>${m(r.balance)}</td><td>${m(r.debt_balance)}</td><td>${m(r.purchase_paid)}</td><td>${m((r.child_contributions || 0) + (r.child_education || 0))}</td><td>${m((r.withdrawal_tax || 0) + (r.tax_true_up || 0))}</td><td>${m(r.unfunded)}</td></tr>`;
     })
     .join('');
 }

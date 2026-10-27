@@ -8,6 +8,7 @@ from datetime import date
 import re
 from . import children as child_planning
 from . import social_security as ss_planning
+from . import federal_tax
 
 VERSION = '2.0.0'
 
@@ -267,6 +268,29 @@ def _owner(row, household, label):
     return owner
 
 
+def _tax_model(plan, household):
+    """None for flat per-account withdrawal rates, or the 2026 federal bracket model.
+
+    In the federal model, pre-tax withdrawals (including required minimum distributions)
+    are ordinary income, the gain share of taxable-account withdrawals is a long-term
+    capital gain, income streams contribute their taxable_share, and Social Security is
+    taxed by provisional income. Withdrawals withhold at an estimated marginal rate and
+    the annual tax is trued up each December from household cash.
+    """
+    rule = plan.get('tax')
+    if rule is None:
+        return None
+    if not isinstance(rule, dict) or rule.get('model', 'flat') not in ('flat', 'federal_2026'):
+        raise ValueError('tax model must be flat or federal_2026')
+    if rule.get('model', 'flat') == 'flat':
+        return None
+    status = rule.get('filing_status', 'married_joint' if household['couple'] else 'single')
+    if status not in federal_tax.FILING_STATUSES:
+        raise ValueError('filing_status must be single or married_joint')
+    return dict(status=status, state_rate=number(rule.get('state_rate', 0), 'state_rate', 0, .2),
+                gain_share=number(rule.get('gain_share', .5), 'gain_share', 0, 1))
+
+
 def _spending_strategy(plan):
     """Optional retirement spending rule; None means fixed spending (the default).
 
@@ -332,11 +356,82 @@ class _Ledger:
             if a.get('type', 'investment') not in ('cash', 'investment', 'retirement', 'property', 'other'):
                 raise ValueError('unsupported account type')
         self.tax_rates = [_withdrawal_tax_rate(a) for a in accounts]
+        self.treatments = [a.get('tax_treatment', 'after_tax') for a in accounts]
+        # Flat mode withholds the account's own rate; the federal model replaces these
+        # estimates each year and settles the difference in December.
+        self.withholding = self.tax_rates
+        self.gain_shares = [None] * len(accounts)
+        self.owners = ['self'] * len(accounts)
+        self.federal = None
         self.market = [a.get('type', 'investment') in ('investment', 'retirement') for a in accounts]
         # Income is available immediately; withdrawals follow the user's account order.
         self.available = [i for i, open_ in enumerate(accessible) if open_]
         self.count = len(accounts)
         self.cash = self.withdrawal_tax = 0.0
+
+    def use_federal_tax(self, model, accounts, household):
+        self.federal = model
+        self.withholding = list(self.tax_rates)
+        for i, a in enumerate(accounts):
+            self.owners[i] = _owner(a, household, 'account')
+            if self.treatments[i] == 'taxable':
+                self.gain_shares[i] = number(a.get('gain_share', model['gain_share']), 'account gain_share', 0, 1)
+        self.start_year()
+
+    def start_year(self):
+        self.ytd = dict(ordinary=0.0, gains=0.0, benefits=0.0, withheld=0.0)
+        self.taken = [0.0] * len(self.balances)
+        self.year_start_balances = list(self.balances)
+
+    def record_taken(self, i, taken, tax):
+        if self.federal is None:
+            return
+        self.taken[i] += taken
+        self.ytd['withheld'] += tax
+        if self.treatments[i] == 'pre_tax':
+            self.ytd['ordinary'] += taken
+        elif self.treatments[i] == 'taxable':
+            self.ytd['gains'] += taken * self.gain_shares[i]
+
+    def close_tax_year(self, year, ages, married, threshold_scale):
+        """Take any shortfall of required minimum distributions, then return the year's tax
+        less what was withheld (negative for a refund) and set next year's withholding."""
+        model, rmd = self.federal, 0.0
+        for i, treatment in enumerate(self.treatments[:self.count]):
+            age = ages.get(self.owners[i])
+            if treatment != 'pre_tax' or age is None:
+                continue
+            if age >= federal_tax.rmd_start_age(ages['_birth_years'][self.owners[i]]):
+                required = self.year_start_balances[i] / federal_tax.rmd_divisor(age) - self.taken[i]
+                take = min(self.balances[i], max(0.0, required))
+                self.balances[i] -= take
+                self.cash += take
+                self.ytd['ordinary'] += take
+                rmd += take
+        status = 'married_joint' if married and model['status'] == 'married_joint' else 'single'
+        aged = sum(1 for who, age in ages.items() if who != '_birth_years' and age is not None and age >= 65)
+        o, g, b = self.ytd['ordinary'], self.ytd['gains'], self.ytd['benefits']
+        tax = lambda o, g: federal_tax.annual_tax(status, o, g, b, aged, model['state_rate'], threshold_scale)
+        owed = tax(o, g)
+        due = owed - self.ytd['withheld']
+        # Next year's withholding: this year's marginal rates on another dollar of each kind.
+        ordinary_rate = min(.9, max(0.0, (tax(o + 1000, g) - owed) / 1000))
+        gains_rate = min(.9, max(0.0, (tax(o, g + 1000) - owed) / 1000))
+        for i, treatment in enumerate(self.treatments):
+            self.withholding[i] = (ordinary_rate if treatment == 'pre_tax' else
+                                   self.gain_shares[i] * gains_rate if treatment == 'taxable' and i < self.count else 0.0)
+        self.ytd = dict(ordinary=0.0, gains=0.0, benefits=0.0, withheld=0.0)
+        self.taken = [0.0] * len(self.balances)
+        return rmd, due
+
+    def tax_mix(self):
+        """Shares of available balances that are pre-tax and that are taxable gains."""
+        gross = sum(self.balances[i] for i in self.available)
+        if gross <= 0:
+            return 0.0, 0.0
+        pre = sum(self.balances[i] for i in self.available if self.treatments[i] == 'pre_tax')
+        gains = sum(self.balances[i] * self.gain_shares[i] for i in self.available if self.treatments[i] == 'taxable')
+        return pre / gross, gains / gross
 
     def grow(self, gain, month, rates, base_rate):
         """Apply a month of return then fees; simulated rates shift market accounts only."""
@@ -367,9 +462,10 @@ class _Ledger:
         for i in self.available:
             if remaining <= 0:
                 break
-            taken, delivered, tax = _gross_withdrawal(self.balances[i], remaining, self.tax_rates[i])
+            taken, delivered, tax = _gross_withdrawal(self.balances[i], remaining, self.withholding[i])
             self.balances[i] -= taken
             self.withdrawal_tax += tax
+            self.record_taken(i, taken, tax)
             remaining = max(0.0, remaining - delivered)
         return amount - remaining, remaining
 
@@ -377,11 +473,21 @@ class _Ledger:
         # Surplus cash joins the first available account; if none is available it is kept
         # in an explicit liquid cash ledger.
         if self.available:
-            self.balances[self.available[0]] += self.cash
+            target = self.available[0]
+            if self.federal is not None:
+                # Reinvesting outside pre-tax accounts keeps a distribution from going back in.
+                target = next((i for i in self.available if self.treatments[i] != 'pre_tax'), target)
+            self.balances[target] += self.cash
         else:
             if len(self.balances) == self.count:
                 self.balances.append(0.0)
                 self.tax_rates.append(0.0)
+                if self.withholding is not self.tax_rates:
+                    self.withholding.append(0.0)
+                self.treatments.append('after_tax')
+                if self.federal is not None:
+                    self.taken.append(0.0)
+                    self.year_start_balances.append(0.0)
                 self.available.append(self.count)
             self.balances[-1] += self.cash
 
@@ -389,7 +495,7 @@ class _Ledger:
         return sum(self.balances[i] for i in self.available)
 
     def after_tax_value(self):
-        return sum(self.balances[i] * (1 - self.tax_rates[i]) for i in self.available)
+        return sum(self.balances[i] * (1 - self.withholding[i]) for i in self.available)
 
     def blended_tax_rate(self):
         # Flat rates make the spendable value order-independent: sum(balance * (1 - rate)).
@@ -418,6 +524,8 @@ def _streams(streams, p):
             every=number(stream.get('every_months', 1), 'every_months', 1, 1200, True),
             growth=number(stream.get('growth_rate', 0), 'growth_rate', -.99, 10),
             enabled=_flag(stream, 'enabled', True), essential=_flag(stream, 'essential', True), owner=stream.get('owner', 'self'))
+        if stream.get('taxable_share') is not None:
+            row['taxable_share'] = number(stream['taxable_share'], 'taxable_share', 0, 1)
         if row['end'] < row['start']:
             raise ValueError('stream end must follow start')
         normalized.append(row)
@@ -527,6 +635,9 @@ def _retirement_spending(plan, p, normalized, purchases, household, survivor_fro
     essential = sum(annualized(row) for row in retirement_streams if row['kind'] == 'expense' and row['essential'])
     discretionary = desired - essential
     income = sum(annualized(row) for row in retirement_streams if row['kind'] == 'income')
+    taxable_income = sum(annualized(row) * row.get('taxable_share', 0.0) for row in retirement_streams
+                         if row['kind'] == 'income' and not row.get('benefit'))
+    benefits = sum(annualized(row) for row in retirement_streams if row['kind'] == 'income' and row.get('benefit'))
     if plan.get('_quick_adapter'):
         desired, income = p['expenses'], 0.0
     # Open-ended upkeep is permanent retirement spending. Costs that end (debt and loan
@@ -538,7 +649,8 @@ def _retirement_spending(plan, p, normalized, purchases, household, survivor_fro
     target = net / p['withdrawal_rate']
     if not all(math.isfinite(value) for value in (desired, income, target)):
         raise ValueError('retirement target exceeds numerical range')
-    return dict(desired=desired, essential=essential, discretionary=discretionary, income=income, net=net, target=target)
+    return dict(desired=desired, essential=essential, discretionary=discretionary, income=income, net=net, target=target,
+                taxable_income=taxable_income, benefits=benefits)
 
 
 class _Guardrails:
@@ -644,6 +756,22 @@ _ANNUAL_SUMS = ('income', 'expenses', 'essential_expenses', 'funded_expenses', '
 _ANNUAL_CLOSING = ('balance', 'available_balance', 'net_worth', 'debt_balance', 'accounts', 'purchase_asset_value', 'spending_factor')
 
 
+def _federal_target(model, mix, spending, obligations, withdrawal_rate, status, aged, threshold_scale):
+    """Grossed-up target for the federal model and the average tax rate on withdrawals.
+
+    G, the annual withdrawal at retirement start, must cover net spending plus all tax:
+    G = W + T(taxable income + pre-tax share of G, gain share of G, benefits). Stream tax
+    alone is part of what G covers, so the rate reported is the tax G itself adds."""
+    pre, gains = mix
+    tax = lambda g: federal_tax.annual_tax(status, spending['taxable_income'] + pre * g, gains * g, spending['benefits'],
+                                           aged, model['state_rate'], threshold_scale)
+    need, gross = spending['net'], spending['net']
+    for _ in range(100):
+        gross = need + tax(gross)
+    rate = (tax(gross) - tax(0.0)) / gross if gross > 0 else 0.0
+    return gross / withdrawal_rate + obligations / (1 - min(.9, rate)), rate
+
+
 def _full_projection(plan, p, rates=None, retain_monthly=True):
     """Monthly ledger for a full plan.
 
@@ -661,6 +789,11 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     initial = sum(ledger.balances)
     normalized = _streams(streams, p)
     household, social_security, survivor_from = _household_income(plan, p, streams, normalized, valuation)
+    tax_model = _tax_model(plan, household)
+    if tax_model:
+        ledger.use_federal_tax(tax_model, accounts, household)
+    inflation = _plan_inflation(plan)
+    birth_years = {who: valuation.year - age for who, age in household['ages'].items()}
     debt_rows = _debt_rows(plan, debts)
     initial_debt = sum(d['balance'] for d in debt_rows)
     purchase_loans = _purchase_loans(purchases)
@@ -681,6 +814,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_balance = initial if retirement_month == 0 else None
     retirement_available_balance = initial_available if retirement_month == 0 else None
     retirement_tax_rate = ledger.blended_tax_rate() if retirement_month == 0 else None
+    retirement_mix = ledger.tax_mix() if tax_model and retirement_month == 0 else None
+    annual_sums = _ANNUAL_SUMS + (('tax_true_up', 'tax_unpaid', 'rmd') if tax_model else ())
     retirement_survives = retirement_essential = retirement_desired = True
     accumulation_shortfall = total_unfunded = 0.0
     first_shortfall = None
@@ -708,6 +843,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             desired *= guardrails.factor
 
         ledger.begin_month(income)
+        if tax_model:
+            ledger.ytd['ordinary'] += sum(value * row.get('taxable_share', 0.0) for row, value in amounts
+                                          if row['kind'] == 'income' and not row.get('benefit'))
+            ledger.ytd['benefits'] += sum(value for row, value in amounts if row.get('benefit'))
         essential_paid, essential_unfunded = ledger.pay(essential)
         debt, debt_ledger = _service_debts(debt_rows, month, ledger.pay)
         desired_paid, desired_unfunded = ledger.pay(desired)
@@ -736,12 +875,28 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 row['balance'] = row['principal']
         purchase_loan_drawn = sum(item['loan_amount'] for item in purchases if item['enabled'] and item['month'] == month)
         asset_value = sum(a['value'] for a in purchase_assets.values())
+        rmd = tax_due = tax_unpaid = 0.0
+        if tax_model and (valuation.month + month) % 12 == 0:
+            year = valuation.year + (valuation.month + month - 1) // 12
+            alive = lambda who: household['deaths'].get(who) is None or household['deaths'][who] > month
+            ages = {who: age + year - valuation.year if alive(who) else None for who, age in household['ages'].items()}
+            ages['_birth_years'] = birth_years
+            first = household['first_death']
+            married = household['couple'] and (first is None or first[0] > month - 12)
+            rmd, tax_due = ledger.close_tax_year(year, ages, married, (1 + inflation) ** -(year - 2026))
+            # Tax is paid (or refunded) from household cash; any withdrawal it needs counts toward next year.
+            if tax_due > 0:
+                _, tax_unpaid = ledger.pay(tax_due)
+            else:
+                ledger.cash -= tax_due
         ledger.settle()
+        if tax_model and (valuation.month + month) % 12 == 0:
+            ledger.year_start_balances = list(ledger.balances)
 
         closing = sum(ledger.balances) + asset_value
         if not math.isfinite(closing):
             raise ValueError('projection exceeds numerical range')
-        unfunded = essential_unfunded + desired_unfunded + debt['unfunded'] + child_cash['unfunded'] + purchase_unfunded
+        unfunded = essential_unfunded + desired_unfunded + debt['unfunded'] + child_cash['unfunded'] + purchase_unfunded + tax_unpaid
         total_unfunded += unfunded
         if unfunded > 1e-8 and first_shortfall is None:
             first_shortfall = month
@@ -762,6 +917,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             debt_interest=debt['interest'], debt_principal=debt['principal'], debts=debt_ledger, accounts=list(ledger.balances),
             withdrawal_tax=ledger.withdrawal_tax, available_after_tax=ledger.after_tax_value(),
             spending_factor=guardrails.factor if guardrails else 1.0)
+        if tax_model:
+            row.update(tax_true_up=tax_due, tax_unpaid=tax_unpaid, rmd=rmd)
 
         if month >= retirement_start:
             # Sale proceeds offset the costs they fund; payoffs from them are counted as paid.
@@ -772,15 +929,17 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             accumulation_shortfall += unfunded
         else:
             retirement_survives = retirement_survives and row['available_balance'] > 1e-8
-            retirement_essential = retirement_essential and essential_unfunded + debt['unfunded'] <= 1e-8
+            retirement_essential = retirement_essential and essential_unfunded + debt['unfunded'] + tax_unpaid <= 1e-8
             retirement_desired = retirement_desired and desired_unfunded + purchase_unfunded + child_cash['unfunded'] <= 1e-8
         if month == retirement_month:
             retirement_balance = closing
             retirement_available_balance = row['available_balance']
             retirement_tax_rate = ledger.blended_tax_rate()
+            if tax_model:
+                retirement_mix = ledger.tax_mix()
         if (month - 1) % 12 == 0:
-            year_row = dict(year=(month-1)//12+1, age=p['age']+(month-1)//12+1, opening=opening, **{key:0.0 for key in _ANNUAL_SUMS})
-        for key in _ANNUAL_SUMS:
+            year_row = dict(year=(month-1)//12+1, age=p['age']+(month-1)//12+1, opening=opening, **{key:0.0 for key in annual_sums})
+        for key in annual_sums:
             year_row[key] += row[key]
         if month % 12 == 0:
             year_row.update({key:row[key] for key in _ANNUAL_CLOSING})
@@ -794,6 +953,17 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         # Retirement falls after the horizon; use the mix of available accounts at its end.
         retirement_tax_rate = ledger.blended_tax_rate()
     target = after_tax_target / (1 - retirement_tax_rate)
+    if tax_model:
+        if retirement_mix is None:
+            retirement_mix = ledger.tax_mix()
+        partner_at_retirement = (household['ages']['partner'] + retirement_age - p['age']) if household['couple'] else None
+        aged = sum(1 for age in (retirement_age, partner_at_retirement) if age is not None and age >= 65)
+        first = household['first_death']
+        married = household['couple'] and (first is None or first[0] > retirement_start)
+        status = 'married_joint' if married and tax_model['status'] == 'married_joint' else 'single'
+        retirement_year = valuation.year + (valuation.month + retirement_start - 1) // 12
+        target, retirement_tax_rate = _federal_target(tax_model, retirement_mix, spending, retirement_obligations,
+            p['withdrawal_rate'], status, aged, (1 + inflation) ** -max(0, retirement_year - 2026))
     if not math.isfinite(target):
         raise ValueError('retirement target exceeds numerical range')
     has_window = retirement_month < p['horizon'] * 12

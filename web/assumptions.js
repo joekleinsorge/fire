@@ -8,6 +8,14 @@ function syncGuardrailFields() {
     l.querySelector('input').disabled = !on;
   }
 }
+function syncTaxFields() {
+  const f = $('assumptions-form'),
+    on = f.elements.tax_model.value === 'federal_2026';
+  for (const l of f.querySelectorAll('.tax-field')) {
+    l.hidden = !on;
+    l.querySelector('input,select').disabled = !on;
+  }
+}
 function syncPartnerFields() {
   const f = $('assumptions-form'),
     on = f.elements.has_partner.checked;
@@ -40,12 +48,21 @@ function fillAssumptions() {
     f.elements.survivor_spending.value = Math.round((plan.survivor_spending ?? 0.7) * 100);
     syncPartnerFields();
   }
+  {
+    const t = plan.tax || {};
+    f.elements.tax_model.value = t.model === 'federal_2026' ? 'federal_2026' : 'flat';
+    f.elements.filing_status.value = t.filing_status || (plan.partner ? 'married_joint' : 'single');
+    f.elements.state_rate.value = ((t.state_rate ?? 0) * 100).toFixed(1);
+    f.elements.gain_share.value = Math.round((t.gain_share ?? 0.5) * 100);
+    syncTaxFields();
+  }
   f.elements.inflation_rate.value = ((+plan.inflation_rate || 0) * 100).toFixed(1);
   f.elements.withdrawal_rate.value = (+plan.withdrawal_rate * 100).toFixed(1);
   $('currency-display').value = plan.currency || 'USD';
 }
 $('assumptions-form').elements.spending_kind.onchange = syncGuardrailFields;
 $('assumptions-form').elements.has_partner.onchange = syncPartnerFields;
+$('assumptions-form').elements.tax_model.onchange = syncTaxFields;
 $('assumptions-form').onsubmit = e => {
   e.preventDefault();
   const d = new FormData(e.currentTarget),
@@ -116,6 +133,14 @@ $('assumptions-form').onsubmit = e => {
       ceiling: +d.get('spending_ceiling') / 100,
     };
   else delete plan.spending_strategy;
+  if (d.get('tax_model') === 'federal_2026')
+    plan.tax = {
+      model: 'federal_2026',
+      filing_status: d.get('filing_status'),
+      state_rate: +d.get('state_rate') / 100,
+      gain_share: +d.get('gain_share') / 100,
+    };
+  else delete plan.tax;
   touch();
   tell('Assumptions applied. Update the projection to recalculate.');
 };

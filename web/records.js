@@ -55,7 +55,9 @@ const definitions = {
       ['return_rate', 'Real annual return (%)', 'percent'],
       ['fee_rate', 'Annual fee (%)', 'percent'],
       ['tax_treatment', 'Tax treatment', 'select', Object.entries(taxTreatments)],
-      ['withdrawal_tax_rate', 'Tax on withdrawals (%)', 'percent'],
+      ['withdrawal_tax_rate', 'Tax on withdrawals (% · flat tax model)', 'percent'],
+      ['gain_share', 'Gain share of withdrawals (% · taxable accounts, federal model; blank uses plan)', 'percent'],
+      ['owner', 'Belongs to', 'owner'],
       ['available', 'Available for spending', 'check'],
     ],
   },
@@ -82,6 +84,7 @@ const definitions = {
       ['start', 'Starts', 'timing'],
       ['end', 'Ends', 'timing'],
       ['growth_rate', 'Annual real growth (%)', 'percent'],
+      ['taxable_share', 'Taxable share of income (% · federal tax model)', 'percent'],
       ['enabled', 'Include in plan', 'check'],
       ['essential', 'Essential (expenses)', 'check'],
     ],
@@ -122,7 +125,7 @@ function openRecord(kind, id) {
                             ? 360
                             : key === 'payment'
                               ? ''
-                              : key === 'inflation_rate'
+                              : key === 'inflation_rate' || key === 'gain_share'
                                 ? ''
                                 : key === 'tax_treatment'
                                   ? 'after_tax'
@@ -131,7 +134,7 @@ function openRecord(kind, id) {
                                     : 0;
       if (type === 'owner')
         return plan.partner
-          ? `<label>${label}<select name="owner"><option value="self" ${(row?.owner || 'self') === 'self' ? 'selected' : ''}>You</option><option value="partner" ${row?.owner === 'partner' ? 'selected' : ''}>${esc(personName('partner'))}</option></select><small>Ages use this person’s age; their income stops at their life expectancy.</small></label>`
+          ? `<label>${label}<select name="owner"><option value="self" ${(row?.owner || 'self') === 'self' ? 'selected' : ''}>You</option><option value="partner" ${row?.owner === 'partner' ? 'selected' : ''}>${esc(personName('partner'))}</option></select><small>Ages, required distributions and income that stops at a life expectancy use this person.</small></label>`
           : '';
       if (type === 'timing') return timingField(key, row);
       if (type === 'check')
@@ -206,7 +209,7 @@ $('record-form').onsubmit = e => {
       if (k === 'payment' && v === '') delete row[k];
       else row[k] = +v;
     } else if (f?.[2] === 'percent') {
-      if (k === 'inflation_rate' && v === '') delete row[k];
+      if ((k === 'inflation_rate' || k === 'gain_share') && v === '') delete row[k];
       else row[k] = +v / 100;
     } else row[k] = v;
   }
