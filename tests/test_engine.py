@@ -23,6 +23,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result['annual'][3]['unfunded'], 20)
         self.assertEqual(quick(dict(self.plan, horizon=10))['status'], 'not_reached_within_horizon')
 
+    def test_negative_return_settling_below_target_is_unreachable(self):
+        # Balance climbs toward savings / -return = 400 and never reaches the 1,000 target.
+        self.assertEqual(quick(dict(self.plan, return_rate=-.05))['status'], 'unreachable')
+        self.assertEqual(quick(dict(self.plan, return_rate=-.01))['status'], 'target_reached')
+
+    def test_parametric_return_is_the_median_with_the_stated_volatility(self):
+        # One year from a balance of 1 ends at 1 + the drawn return, so the endings are the draws.
+        result = simulate(dict(self.plan, income=0, expenses=0, assets=1, horizon=1, return_rate=.05),
+                          dict(trials=5000, seed=7, volatility=.15))
+        self.assertAlmostEqual(result['ending_assets']['median'], 1.05, delta=.006)
+        self.assertAlmostEqual(result['ending_assets']['standard_deviation'], .15, delta=.006)
+        # Over many years the typical path compounds at the projection's rate.
+        long = simulate(dict(self.plan, income=0, expenses=0, assets=1, horizon=30, return_rate=.05),
+                        dict(trials=2000, seed=7, volatility=.15))
+        self.assertAlmostEqual(long['ending_assets']['median'] / 1.05 ** 30, 1, delta=.05)
+
     def test_monthly_parity_and_reconciliation(self):
         result = project(dict(self.plan, return_rate=.047))
         reference = quick(dict(self.plan, return_rate=.047))
@@ -526,6 +542,16 @@ class SpendingStrategyTests(unittest.TestCase):
         self.assertGreater(factors[-1], 1.0)
         self.assertLessEqual(max(factors), 1.2)
 
+    def test_guardrails_measure_the_years_scheduled_income(self):
+        # Income starting in year 3 halves what the portfolio must fund, so the rate falls
+        # below the band and discretionary spending rises, though the balance barely moves.
+        rule = dict(kind='guardrails', band=.2, adjustment=.1, floor=.7, ceiling=1.2)
+        plan = self.plan(spending_strategy=rule, accounts=[dict(type='investment', balance=1000000, return_rate=0)],
+                         streams=self.plan()['streams'] + [dict(kind='income', amount=30000 / 12, start_month=25)])
+        factors = [row['spending_factor'] for row in project(plan)['annual']]
+        self.assertEqual(factors[:2], [1.0, 1.0])
+        self.assertAlmostEqual(factors[2], 1.1)
+
     def test_simulation_reports_spending_cuts(self):
         rule = dict(kind='guardrails')
         sim = simulate(self.plan(horizon=10, accounts=[dict(type='investment', balance=1000000, return_rate=.04)],
@@ -623,8 +649,14 @@ class FederalTaxModelTests(unittest.TestCase):
         taken = sum(row['withdrawal_tax'] for row in year) / .22
         self.assertAlmostEqual(year[-1]['tax_true_up'], annual_tax('single', taken, 0, 0, aged=1) - withheld, places=6)
         self.assertLess(year[-1]['tax_true_up'], 0)
-        # About 46,000 of withdrawals sits in the 12% bracket, so year 2 withholds 12%.
-        self.assertAlmostEqual(result['monthly'][12]['withdrawal_tax'] / (result['monthly'][12]['withdrawal_tax'] + 3000), .12)
+        # Year 2 withholds at year 1's average rate on those withdrawals, not the 12% marginal rate.
+        rate = annual_tax('single', taken, 0, 0, aged=1) / taken
+        self.assertAlmostEqual(result['monthly'][12]['withdrawal_tax'] / (result['monthly'][12]['withdrawal_tax'] + 3000), rate)
+        self.assertLess(rate, .12)
+        # With withholding at the average rate, true-ups shrink each year toward zero.
+        true_ups = [abs(result['monthly'][m]['tax_true_up']) for m in (11, 23, 35)]
+        self.assertLess(true_ups[1], .1 * true_ups[0])
+        self.assertLess(true_ups[2], .1 * true_ups[1])
         for row in result['monthly']:
             self.assertAlmostEqual(row['closing'], row['opening'] + row['gain'] - row['fees'] + row['income']
                 - row['funded_expenses'] - row['debt_payment'] - row['withdrawal_tax']
@@ -679,6 +711,19 @@ class FederalTaxModelTests(unittest.TestCase):
         # Year 2 (partner dies at the start of it) is joint; year 3 is single, so tax rises.
         self.assertGreater(rows[2]['tax_true_up'] + rows[2]['withdrawal_tax'], rows[1]['tax_true_up'] + rows[1]['withdrawal_tax'])
 
+    def test_joint_return_in_the_year_of_death_keeps_both_age_deductions(self):
+        from fireplanner.federal_tax import annual_tax
+        # The partner (70) dies at the start of 2027; that year is still a joint return
+        # with both spouses 65 or older.
+        plan = self.plan(partner=dict(age=70, life_expectancy=71), tax=dict(model='federal_2026'),
+            accounts=[dict(type='retirement', balance=1000000, return_rate=0, tax_treatment='pre_tax'),
+                      dict(type='investment', balance=0, return_rate=0)])
+        months = project(plan)['monthly']
+        year = months[12:24]
+        taken = months[11]['accounts'][0] - year[-1]['accounts'][0]
+        owed = sum(row['withdrawal_tax'] for row in year) + year[-1]['tax_true_up']
+        self.assertAlmostEqual(owed, annual_tax('married_joint', taken, 0, 0, aged=2), places=6)
+
     def test_target_grosses_up_withdrawals_for_federal_tax(self):
         from fireplanner.federal_tax import annual_tax
         result = project(self.plan())
@@ -724,6 +769,28 @@ class FederalTaxModelTests(unittest.TestCase):
         self.assertLess(efficient['monthly'][2]['accounts'][2], 100000)
         with self.assertRaisesRegex(ValueError, 'withdrawal_order'):
             project(self.plan(withdrawal_order='random'))
+
+    def test_later_valuation_years_index_the_2026_amounts(self):
+        # The same real spending valued ten years later is in dollars 3% a year larger, so
+        # the tax and the target are the 2026 figures scaled by that price level.
+        scale = 1.03 ** 10
+        early = project(self.plan(valuation_date='2026-12-31', inflation_rate=.03))
+        late = project(self.plan(valuation_date='2036-12-31', inflation_rate=.03,
+            accounts=[dict(type='retirement', balance=1000000 * scale, return_rate=0, tax_treatment='pre_tax')],
+            streams=[dict(kind='expense', amount=5000 * scale)]))
+        tax = lambda r: r['annual'][0]['withdrawal_tax'] + r['annual'][0]['tax_true_up']
+        self.assertAlmostEqual(tax(late), tax(early) * scale, places=4)
+        self.assertAlmostEqual(late['target'], early['target'] * scale, places=2)
+
+    def test_partial_first_year_is_taxed_at_its_annual_run_rate(self):
+        from fireplanner.federal_tax import annual_tax
+        # An October valuation leaves November and December in the first tax year.
+        result = project(self.plan(valuation_date='2026-10-31'))
+        first = result['monthly'][:2]
+        taken = sum(row['withdrawal_tax'] for row in first) / .22
+        withheld = sum(row['withdrawal_tax'] for row in first)
+        expected = annual_tax('single', taken * 6, 0, 0, aged=1) / 6
+        self.assertAlmostEqual(first[-1]['tax_true_up'], expected - withheld, places=6)
 
     def test_invalid_tax_settings(self):
         with self.assertRaisesRegex(ValueError, 'tax model'):

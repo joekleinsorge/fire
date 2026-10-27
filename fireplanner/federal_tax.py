@@ -8,9 +8,11 @@ Sources (reviewed 2026-10-26):
   $32,000) and adjusted base amounts ($34,000 / $44,000), as in the IRS Publication 915
   worksheet. These amounts are not indexed for inflation.
 
-Projections are in constant 2026 dollars. Brackets, deductions and capital gains
-breakpoints are indexed for inflation, so they stay fixed in real terms; the Social
-Security thresholds are not indexed, so callers shrink them by cumulative inflation.
+These functions work in constant 2026 dollars; callers with a later price basis divide
+amounts by their price level relative to 2026 and scale the tax back. Brackets, deductions
+and capital gains breakpoints are indexed for inflation, so they stay fixed in real terms;
+the Social Security thresholds are not indexed, so callers shrink them by cumulative
+inflation since 2026.
 Not modeled: the temporary 2025-2028 senior deduction, the net investment income tax,
 itemized deductions, credits, AMT, and state tax beyond a flat rate.
 """

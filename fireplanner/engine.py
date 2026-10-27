@@ -78,7 +78,9 @@ def _annual(p, rates=None):
         status = 'funding_shortfall'
     elif crossing is not None:
         status = 'target_reached'
-    elif rates is None and balance <= p['assets']:
+    elif rates is None and (balance <= p['assets'] or p['return_rate'] < 0 and savings / -p['return_rate'] <= target):
+        # A falling balance never recovers; with a negative return the balance settles
+        # toward savings / -return, so a resting point at or below the target is never reached.
         status = 'unreachable'
     else:
         status = 'not_reached_within_horizon'
@@ -274,7 +276,7 @@ def _tax_model(plan, household):
     In the federal model, pre-tax withdrawals (including required minimum distributions)
     are ordinary income, the gain share of taxable-account withdrawals is a long-term
     capital gain, income streams contribute their taxable_share, and Social Security is
-    taxed by provisional income. Withdrawals withhold at an estimated marginal rate and
+    taxed by provisional income. Withdrawals withhold at the prior year's average rate and
     the annual tax is trued up each December from household cash.
     """
     rule = plan.get('tax')
@@ -384,8 +386,10 @@ class _Ledger:
         self.count = len(accounts)
         self.cash = self.withdrawal_tax = 0.0
 
-    def use_federal_tax(self, model, accounts, household):
+    def use_federal_tax(self, model, accounts, household, dollars=1.0):
         self.federal = model
+        # Plan dollars per 2026 dollar: the tax tables are in 2026 dollars.
+        self.dollars = dollars
         self.withholding = list(self.tax_rates)
         for i, a in enumerate(accounts):
             self.owners[i] = _owner(a, household, 'account')
@@ -408,31 +412,41 @@ class _Ledger:
         elif self.treatments[i] == 'taxable':
             self.ytd['gains'] += taken * self.gain_shares[i]
 
-    def close_tax_year(self, year, ages, married, threshold_scale):
+    def close_tax_year(self, year, ages, married, threshold_scale, fraction=1.0, aged=None):
         """Take any shortfall of required minimum distributions, then return the year's tax
-        less what was withheld (negative for a refund) and set next year's withholding."""
+        less what was withheld (negative for a refund) and set next year's withholding.
+
+        A first tax year covering only `fraction` of the calendar year is taxed at the annual
+        run rate of its months, so a full-year deduction does not shelter a few months' income."""
         model, rmd = self.federal, 0.0
+        # Plan dollars per annualized 2026 dollar of this tax year.
+        unit = self.dollars * fraction
         for i, treatment in enumerate(self.treatments[:self.count]):
             age = ages.get(self.owners[i])
             if treatment != 'pre_tax' or age is None:
                 continue
             if age >= federal_tax.rmd_start_age(ages['_birth_years'][self.owners[i]]):
-                required = self.year_start_balances[i] / federal_tax.rmd_divisor(age) - self.taken[i]
+                required = fraction * self.year_start_balances[i] / federal_tax.rmd_divisor(age) - self.taken[i]
                 take = min(self.balances[i], max(0.0, required))
                 self.balances[i] -= take
                 self.cash += take
                 self.ytd['ordinary'] += take
                 rmd += take
         status = 'married_joint' if married and model['status'] == 'married_joint' else 'single'
-        aged = sum(1 for who, age in ages.items() if who != '_birth_years' and age is not None and age >= 65)
-        converted = self.convert_to_roth(status, ages, aged, threshold_scale)
+        if aged is None:
+            aged = sum(1 for who, age in ages.items() if who != '_birth_years' and age is not None and age >= 65)
+        converted = self.convert_to_roth(status, ages, aged, threshold_scale, unit)
         o, g, b = self.ytd['ordinary'], self.ytd['gains'], self.ytd['benefits']
-        tax = lambda o, g: federal_tax.annual_tax(status, o, g, b, aged, model['state_rate'], threshold_scale)
+        tax = lambda o, g: unit * federal_tax.annual_tax(status, o / unit, g / unit, b / unit, aged,
+                                                         model['state_rate'], threshold_scale)
         owed = tax(o, g)
         due = owed - self.ytd['withheld']
-        # Next year's withholding: this year's marginal rates on another dollar of each kind.
-        ordinary_rate = min(.9, max(0.0, (tax(o + 1000, g) - owed) / 1000))
-        gains_rate = min(.9, max(0.0, (tax(o, g + 1000) - owed) / 1000))
+        # Next year's withholding: the average rate this year's income of each kind added, so
+        # withholding tracks the tax actually owed and December true-ups stay small. Without
+        # income of a kind, the marginal rate on its first 1,000 stands in.
+        average = lambda amount, without, more: ((owed - without) / amount if amount > 1 else (more - owed) / 1000)
+        ordinary_rate = min(.9, max(0.0, average(o, tax(0.0, g), tax(o + 1000, g))))
+        gains_rate = min(.9, max(0.0, average(g, tax(o, 0.0), tax(o, g + 1000))))
         for i, treatment in enumerate(self.treatments):
             self.withholding[i] = (ordinary_rate if treatment == 'pre_tax' else
                                    self.gain_shares[i] * gains_rate if treatment == 'taxable' and i < self.count else 0.0)
@@ -440,7 +454,7 @@ class _Ledger:
         self.taken = [0.0] * len(self.balances)
         return rmd, due, converted
 
-    def convert_to_roth(self, status, ages, aged, threshold_scale):
+    def convert_to_roth(self, status, ages, aged, threshold_scale, unit=1.0):
         """Move pre-tax savings into the first Roth account up to the top of a bracket."""
         rule = self.federal['roth_conversion']
         age = ages.get('self')
@@ -448,8 +462,9 @@ class _Ledger:
         if rule is None or roth is None or age is None or not rule['start_age'] <= age <= rule['end_age']:
             return 0.0
         sources = [i for i in range(self.count) if self.treatments[i] == 'pre_tax']
-        amount = federal_tax.conversion_to_fill(status, rule['fill_to'], self.ytd['ordinary'], self.ytd['gains'],
-            self.ytd['benefits'], sum(self.balances[i] for i in sources), aged, threshold_scale)
+        ytd = {key: value / unit for key, value in self.ytd.items()}
+        amount = unit * federal_tax.conversion_to_fill(status, rule['fill_to'], ytd['ordinary'], ytd['gains'],
+            ytd['benefits'], sum(self.balances[i] for i in sources) / unit, aged, threshold_scale)
         remaining = amount
         for i in sources:
             moved = min(self.balances[i], remaining)
@@ -699,17 +714,35 @@ def _retirement_spending(plan, p, normalized, purchases, household, survivor_fro
                 taxable_income=taxable_income, benefits=benefits)
 
 
+def _scheduled_flows(normalized, month, survivor_factor):
+    """Annualized essential spending, discretionary spending and income scheduled at a month."""
+    essential = discretionary = income = 0.0
+    for row in normalized:
+        if not row['enabled'] or not row['start'] <= month < row['end']:
+            continue
+        value = row['amount'] * (1 + row['growth']) ** ((month - row['start']) / 12) * 12 / row['every']
+        if row['kind'] == 'income':
+            income += value
+        elif row['essential']:
+            essential += value * survivor_factor
+        else:
+            discretionary += value * survivor_factor
+    return essential, discretionary, income
+
+
 class _Guardrails:
     """Tracks the spending multiplier applied to discretionary spending in retirement."""
 
-    def __init__(self, strategy, spending):
-        self.strategy, self.spending = strategy, spending
+    def __init__(self, strategy):
+        self.strategy = strategy
         self.factor = self.lowest = 1.0
         self.initial_rate = None
 
-    def review(self, available):
-        planned = max(0.0, self.spending['essential'] + self.spending['discretionary'] * self.factor
-                      - self.spending['income'])
+    def review(self, available, flows):
+        # The withdrawal rate is this year's scheduled spending less income, so income that
+        # starts or stops after retirement (Social Security, a pension) changes the burden.
+        essential, discretionary, income = flows
+        planned = max(0.0, essential + discretionary * self.factor - income)
         if available > 0:
             rate = planned / available
             if self.initial_rate is None:
@@ -802,15 +835,16 @@ _ANNUAL_SUMS = ('income', 'expenses', 'essential_expenses', 'funded_expenses', '
 _ANNUAL_CLOSING = ('balance', 'available_balance', 'net_worth', 'debt_balance', 'accounts', 'purchase_asset_value', 'spending_factor')
 
 
-def _federal_target(model, mix, spending, obligations, withdrawal_rate, status, aged, threshold_scale):
+def _federal_target(model, mix, spending, obligations, withdrawal_rate, status, aged, threshold_scale, dollars=1.0):
     """Grossed-up target for the federal model and the average tax rate on withdrawals.
 
     G, the annual withdrawal at retirement start, must cover net spending plus all tax:
     G = W + T(taxable income + pre-tax share of G, gain share of G, benefits). Stream tax
-    alone is part of what G covers, so the rate reported is the tax G itself adds."""
+    alone is part of what G covers, so the rate reported is the tax G itself adds.
+    `dollars` is plan dollars per 2026 dollar, the unit of the tax tables."""
     pre, gains = mix
-    tax = lambda g: federal_tax.annual_tax(status, spending['taxable_income'] + pre * g, gains * g, spending['benefits'],
-                                           aged, model['state_rate'], threshold_scale)
+    tax = lambda g: dollars * federal_tax.annual_tax(status, (spending['taxable_income'] + pre * g) / dollars,
+        gains * g / dollars, spending['benefits'] / dollars, aged, model['state_rate'], threshold_scale)
     need, gross = spending['net'], spending['net']
     for _ in range(100):
         gross = need + tax(gross)
@@ -839,9 +873,12 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     normalized = _streams(streams, p)
     household, social_security, survivor_from = _household_income(plan, p, streams, normalized, valuation)
     tax_model = _tax_model(plan, household)
-    if tax_model:
-        ledger.use_federal_tax(tax_model, accounts, household)
     inflation = _plan_inflation(plan)
+    # Amounts are in valuation-year purchasing power; the indexed 2026 tax amounts keep their
+    # real value, so a later valuation year sees them larger by the inflation since 2026.
+    tax_dollars = (1 + inflation) ** (valuation.year - 2026)
+    if tax_model:
+        ledger.use_federal_tax(tax_model, accounts, household, tax_dollars)
     birth_years = {who: valuation.year - age for who, age in household['ages'].items()}
     debt_rows = _debt_rows(plan, debts)
     initial_debt = sum(d['balance'] for d in debt_rows)
@@ -856,7 +893,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_start = retirement_month + 1
     strategy = _spending_strategy(plan)
     spending = _retirement_spending(plan, p, normalized, purchases, household, survivor_from, retirement_start)
-    guardrails = _Guardrails(strategy, spending) if strategy else None
+    guardrails = _Guardrails(strategy) if strategy else None
     obligation_discount = (1 + p['return_rate']) ** (1 / 12)
     retirement_obligations = 0.0
     initial_available = ledger.available_balance()
@@ -888,7 +925,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         desired = sum(value for row, value in amounts if row['kind'] == 'expense' and not row['essential'])
         if guardrails and month >= retirement_start:
             if (month - retirement_start) % 12 == 0:
-                guardrails.review(ledger.available_balance())
+                guardrails.review(ledger.available_balance(), _scheduled_flows(normalized, month, survivor_factor))
             desired *= guardrails.factor
 
         ledger.begin_month(income)
@@ -932,7 +969,12 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             ages['_birth_years'] = birth_years
             first = household['first_death']
             married = household['couple'] and (first is None or first[0] > month - 12)
-            rmd, tax_due, converted = ledger.close_tax_year(year, ages, married, (1 + inflation) ** -(year - 2026))
+            # A joint return in the year of a death keeps the deceased spouse's age-65 deduction.
+            aged = sum(1 for who, age in household['ages'].items()
+                       if age + year - valuation.year >= 65 and (alive(who) or married))
+            # Month 12 or earlier is the first December, closing a tax year of `month` modeled months.
+            rmd, tax_due, converted = ledger.close_tax_year(year, ages, married, (1 + inflation) ** -(year - 2026),
+                                                            min(month, 12) / 12, aged)
             # Tax is paid (or refunded) from household cash; any withdrawal it needs counts toward next year.
             if tax_due > 0:
                 _, tax_unpaid = ledger.pay(tax_due)
@@ -1012,7 +1054,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         status = 'married_joint' if married and tax_model['status'] == 'married_joint' else 'single'
         retirement_year = valuation.year + (valuation.month + retirement_start - 1) // 12
         target, retirement_tax_rate = _federal_target(tax_model, retirement_mix, spending, retirement_obligations,
-            p['withdrawal_rate'], status, aged, (1 + inflation) ** -max(0, retirement_year - 2026))
+            p['withdrawal_rate'], status, aged, (1 + inflation) ** -(retirement_year - 2026), tax_dollars)
     if not math.isfinite(target):
         raise ValueError('retirement target exceeds numerical range')
     has_window = retirement_month < p['horizon'] * 12
@@ -1085,6 +1127,11 @@ def simulate(plan, settings=None):
         raise ValueError('unsupported simulation mode')
     mean = number(settings.get('mean', p['return_rate']), 'mean', -.99, 10)
     volatility = number(settings.get('volatility', .15), 'volatility', 0, 3)
+    # Lognormal gross returns with median 1 + mean, so the typical path compounds at the
+    # projection's effective annual rate. volatility is the standard deviation of annual
+    # returns: with x = exp(sigma^2), (1 + mean)^2 * x * (x - 1) = volatility^2.
+    spread = (volatility / (1 + mean)) ** 2
+    sigma = math.sqrt(math.log((1 + math.sqrt(1 + 4 * spread)) / 2))
     history = settings.get('historical_returns', [])
     if mode != 'parametric':
         if not isinstance(history, list) or not history or len(history) > 10000:
@@ -1110,9 +1157,7 @@ def simulate(plan, settings=None):
         rates = []
         while len(rates) < p['horizon']:
             if mode == 'parametric':
-                # Lognormal gross returns: mean is expected arithmetic annual return.
-                sigma = math.sqrt(math.log1p((volatility / (1 + mean)) ** 2))
-                rates.append(math.exp(rng.gauss(math.log1p(mean) - sigma * sigma / 2, sigma)) - 1)
+                rates.append(math.exp(rng.gauss(math.log1p(mean), sigma)) - 1)
             elif mode == 'historical':
                 rates = history[trial:trial + p['horizon']]
             elif mode == 'resampling':
@@ -1187,7 +1232,7 @@ def simulate(plan, settings=None):
     if essential is not None:
         setting_metadata['essential_expenses'] = essential
     meta.update(settings=setting_metadata, random_generator='python.Random MT19937; per-trial string seed v1',
-        distribution='lognormal gross return, arithmetic mean and standard deviation' if mode == 'parametric' else ('annual supplied returns, rolling consecutive complete windows; incomplete windows excluded' if mode == 'historical' else 'annual supplied returns with replacement; overlapping non-wrapping blocks for block mode'),
+        distribution='lognormal gross return; mean is the median (geometric) annual return, volatility the standard deviation of annual returns' if mode == 'parametric' else ('annual supplied returns, rolling consecutive complete windows; incomplete windows excluded' if mode == 'historical' else 'annual supplied returns with replacement; overlapping non-wrapping blocks for block mode'),
         history_digest=hashlib.sha256(json.dumps(history).encode()).hexdigest())
     incomplete = [dict(start_index=i, available_years=len(history)-i, required_years=p['horizon']) for i in range(trials, len(history))] if mode == 'historical' else []
     annual_bands = [dict(year=year+1, age=p['age']+year+1, **{name: _percentile([path['annual'][year]['balance'] for path in paths], fraction) for name, fraction in (('p10',.1),('median',.5),('p90',.9))}) for year in range(p['horizon'])] if full and paths else []
