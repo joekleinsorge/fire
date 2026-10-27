@@ -55,6 +55,7 @@ function renderSummary() {
     $('debt-health').textContent = money(s.debt);
     $('health-status').textContent = 'Awaiting projection';
     $('projection-note').textContent = 'Updating your projection…';
+    $('model-notes').hidden = true;
     $('chart').innerHTML = '<div class="chart-empty">Updating your forecast…</div>';
     return;
   }
@@ -98,6 +99,10 @@ function renderSummary() {
   $('health-status').textContent = projection.first_shortfall_month ? 'Review shortfall' : 'On track in model';
   $('projection-note').textContent =
     `${rows.length} years modeled · fixed real return estimate · ${projection.metadata?.engine_version || 'projection'}`;
+  // Engine warnings explain assumptions and anything in this plan the model could not apply.
+  const notes = projection.warnings || [];
+  $('model-notes').hidden = !notes.length;
+  $('model-notes-list').innerHTML = notes.map(n => `<li>${esc(n)}</li>`).join('');
   renderChart(rows, projection.target);
   if (typeof renderWealth === 'function') renderWealth();
   renderAnnual();
