@@ -114,6 +114,41 @@ class TaxTests(unittest.TestCase):
         self.assertTrue(any("survivor filing status" in w for w in result["warnings"]))
         self.assertGreater(result["tax_analysis"]["annual"][0]["taxable_social_security"], 0)
 
+    def fill_plan(self, rule, **extra):
+        accounts = [
+            dict(id="cash", type="cash", balance=200000, return_rate=0, available=True, tax_treatment="cash"),
+            dict(id="ira", type="retirement", balance=500000, return_rate=0, available=True, tax_treatment="pretax"),
+            dict(id="roth", type="retirement", balance=0, return_rate=0, available=True, tax_treatment="roth_qualified"),
+        ]
+        return self.plan(horizon=3, accounts=accounts, streams=[dict(kind="expense", amount=1000)],
+                         tax_model=dict(self.plan()["tax_model"], roth_conversion_fill=rule), **extra)
+
+    def test_roth_conversion_fills_the_chosen_bracket_each_december(self):
+        rule = dict(source_account_id="ira", target_account_id="roth", fill_to=0.12, start_age=60, end_age=61)
+        result = project(self.fill_plan(rule))
+        events = result["summary"]["conversion_events"]
+        # Valuation 2025-12-31: Decembers 2026-2028 fall at ages 61-63, so only 2026 is in the window.
+        self.assertEqual([e["month"] for e in events], [12])
+        # Cash pays the spending, so the conversion alone fills ordinary income to the
+        # top of the 12% bracket plus the standard deduction.
+        self.assertAlmostEqual(events[0]["amount"], 100800 + 32200, places=4)
+        self.assertTrue(events[0]["executed"])
+        year = result["tax_analysis"]["annual"][0]
+        self.assertAlmostEqual(year["ordinary_taxable"], 100800, places=4)
+        self.assertAlmostEqual(result["monthly"][11]["accounts"][2], 133000, places=4)
+        self.assertAlmostEqual(result["summary"]["conversion_tax"], federal(ordinary=133000)["total_tax"], places=4)
+
+    def test_roth_conversion_fill_skips_rmd_years_and_validates(self):
+        rule = dict(source_account_id="ira", target_account_id="roth", fill_to=0.22, start_age=60, end_age=70)
+        plan = self.fill_plan(rule)
+        plan["accounts"][1].update(rmd_start_age=73, owner_birth_year=1953, prior_year_end_nominal_balance=500000)
+        # Born 1953 with RMDs from 73: every year from 2026 is an RMD year, so nothing converts.
+        self.assertEqual(project(plan)["summary"]["conversion_events"], [])
+        with self.assertRaisesRegex(ValueError, "fill_to"):
+            project(self.fill_plan(dict(rule, fill_to=0.37)))
+        with self.assertRaisesRegex(ValueError, "pretax source"):
+            project(self.fill_plan(dict(rule, source_account_id="cash")))
+
     def test_basis_deposits_and_tax_year_reset(self):
         p = self.plan(
             valuation_date="2026-10-15",
