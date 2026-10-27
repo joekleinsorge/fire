@@ -167,6 +167,14 @@ Conversions specify month, amount, source/destination account IDs and optional
 minimum liquid reserve. They require separate liquid funding for the tax;
 blocked events do not transfer assets. Converted Roth money is not unlocked
 early. RMD-year conversion ordering is explicitly unsupported.
+`roth_conversion_fill` instead fills a bracket each December: give
+`source_account_id` (pretax), `target_account_id` (roth_qualified), `fill_to`
+(0.10, 0.12, 0.22, 0.24, 0.32 or 0.35), `start_age`/`end_age` (your age in the
+calendar year, inclusive) and an optional `minimum_liquid_reserve`. Each
+December converts the largest amount that keeps ordinary taxable income within
+the top of that bracket after the year's income and withdrawals so far (taxable
+Social Security included). The tax is funded and blocked exactly like a
+scheduled conversion; years when the source owes an RMD are skipped.
 
 Full results contain calendar-year `tax_analysis` and per-month accounting.
 Eligible post2017 qualified home mortgage interest and property taxes may

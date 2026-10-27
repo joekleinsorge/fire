@@ -595,8 +595,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         if tax_ledger.enabled:
             for conversion in tax_ledger.conversions:
                 if conversion['month']!=month:continue
-                source,target=conversion['source_index'],conversion['target_index'];amount=conversion['amount']
-                state=tax_ledger.state(month);cost=tax_ledger.increment(state,amount,0)
+                source,target=conversion['source_index'],conversion['target_index'];state=tax_ledger.state(month)
+                amount=conversion['amount'] if conversion['amount'] is not None else tax_ledger.fill_amount(conversion,state,balances[source])
+                if amount<=0:continue
+                cost=tax_ledger.increment(state,amount,0)
                 allowed=[i for i in available_indices if i<len(accounts) and accounts[i]['tax_treatment'] in ('cash','taxable') and i not in (source,target)]
                 state['ordinary']+=amount
                 liquid=cash+tax_ledger.liquidity(allowed,balances,month)

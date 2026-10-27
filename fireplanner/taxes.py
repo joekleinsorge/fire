@@ -296,6 +296,7 @@ class TaxLedger:
                 )
             conversion["source_index"] = source
             conversion["target_index"] = target
+        self.conversions += self.fill_schedule(config.get("roth_conversion_fill"), accounts)
         for i, a in enumerate(accounts):
             treatment = a.get("tax_treatment")
             if treatment not in (
@@ -328,6 +329,60 @@ class TaxLedger:
                 raise ValueError(
                     "Tax model requires a separately reviewed early-access rule before age59.5"
                 )
+
+    def fill_schedule(self, rule, accounts):
+        """December conversions that fill a bracket between two ages.
+
+        Each December from start_age through end_age (the plan owner's age in that
+        calendar year) converts from the pre-tax source to the Roth target the largest
+        amount that keeps ordinary taxable income within the top of the fill_to bracket,
+        after the year's income and withdrawals so far. Years when the source owes an RMD
+        are skipped, as RMD-year ordering is not supported.
+        """
+        if rule is None:
+            return []
+        if not isinstance(rule, dict):
+            raise ValueError("roth_conversion_fill must be an object")
+        tops = {rate: top for top, rate in LIMITS if math.isfinite(top)}
+        if rule.get("fill_to") not in tops:
+            raise ValueError("roth_conversion_fill fill_to must be a bracket rate from 10% to 35%")
+        ids = [a.get("id") for a in accounts]
+        source = ids.index(rule.get("source_account_id")) if rule.get("source_account_id") in ids else None
+        target = ids.index(rule.get("target_account_id")) if rule.get("target_account_id") in ids else None
+        if (source is None or target is None or accounts[source].get("tax_treatment") != "pretax"
+                or accounts[target].get("tax_treatment") != "roth_qualified"):
+            raise ValueError("roth_conversion_fill requires a pretax source and Roth destination account")
+        age = self.plan.get("age", 0)
+        start = value(rule.get("start_age", age), "roth_conversion_fill start_age", 0, 150)
+        end = value(rule.get("end_age", 74), "roth conversion end_age", start, 150)
+        reserve = value(rule.get("minimum_liquid_reserve", 0), "conversion reserve")
+        a = accounts[source]
+        schedule = []
+        for month in range(1, int(self.plan.get("horizon", 0)) * 12 + 1):
+            year, calendar_month = self.calendar(month)
+            owner_age = age + year - self.valuation.year
+            if calendar_month != 12 or not start <= owner_age <= end:
+                continue
+            if a.get("rmd_start_age") and year - a.get("owner_birth_year", 0) >= a["rmd_start_age"]:
+                continue
+            schedule.append(dict(month=month, amount=None, fill_to=rule["fill_to"], fill_top=tops[rule["fill_to"]],
+                                 source_index=source, target_index=target,
+                                 source_account_id=rule["source_account_id"], target_account_id=rule["target_account_id"],
+                                 minimum_liquid_reserve=reserve))
+        return schedule
+
+    def fill_amount(self, conversion, state, available):
+        """Largest conversion up to `available` keeping ordinary taxable income in the bracket."""
+        fits = lambda amount: self.liability(state, state["ordinary"] + amount, state["gains"])["ordinary_taxable"] <= conversion["fill_top"]
+        if available <= 0 or not fits(0.0):
+            return 0.0
+        if fits(available):
+            return available
+        low, high = 0.0, available
+        for _ in range(60):
+            middle = (low + high) / 2
+            low, high = (middle, high) if fits(middle) else (low, middle)
+        return low
 
     def calendar(self, month):
         total = self.valuation.month - 1 + month
