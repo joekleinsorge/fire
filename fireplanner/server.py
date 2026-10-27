@@ -2,6 +2,7 @@
 import argparse
 import csv
 import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -77,6 +78,14 @@ class Worker:
 
 
 def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', static=None, workers=True):
+    owner_email = os.environ.get('FIRE_OIDC_OWNER_EMAIL', '').strip().lower()
+    if owner_email:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError as exc:
+            raise ValueError('FIRE_OIDC_OWNER_EMAIL requires a loopback bind address') from exc
+        if not loopback:
+            raise ValueError('FIRE_OIDC_OWNER_EMAIL requires a loopback bind address')
     store = Store(database)
     root = Path(static or Path(__file__).resolve().parent.parent/'web').resolve()
 
@@ -113,6 +122,7 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                 return ''
 
         def dispatch(self):
+            configured_owner_email = os.environ.get('FIRE_OIDC_OWNER_EMAIL', '').strip().lower()
             path = urlsplit(self.path).path
             parts = path.strip('/').split('/')
             data = {}
@@ -165,19 +175,20 @@ def make_server(host='127.0.0.1', port=8080, database='data/planner.sqlite3', st
                 return self.send(200,candidate.read_bytes(),mimetypes.guess_type(str(candidate))[0] or 'application/octet-stream')
             user = store.user(self.token())
             if not user:
-                # X-Forwarded-Email is trusted only behind the in-pod OIDC proxy.
-                # The deployment restricts direct access to this container port.
                 asserted_email = self.headers.get('X-Forwarded-Email', '').strip().lower()
-                owner_email = os.environ.get('FIRE_OIDC_OWNER_EMAIL', '').strip().lower()
-                if asserted_email and owner_email:
+                if asserted_email and configured_owner_email and asserted_email == configured_owner_email:
                     with store.connect() as db:
                         row = db.execute(
                             'SELECT id,email,household,role FROM users WHERE email=? AND role=?',
-                            (owner_email, 'owner')).fetchone()
+                            (configured_owner_email, 'owner')).fetchone()
                     user = dict(row) if row else None
             if path == '/api/auth/me' and self.command=='GET':
-                # Signed-out callers get an explicit null user rather than an error.
-                return self.send(200,{'user':user or None})
+                # This public endpoint lets the browser choose local login or OIDC.
+                return self.send(200,{'user':user or None,'oidc':bool(configured_owner_email)})
+            if path == '/api/auth/oidc' and self.command=='GET':
+                if not user:
+                    return self.send(401,{'error':'Sign in required'})
+                return self.send(200,{'user':user,'oidc':bool(configured_owner_email)})
             if not user:
                 return self.send(401,{'error':'Sign in required'})
             if path == '/api/household/members' and self.command=='GET':

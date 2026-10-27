@@ -25,10 +25,18 @@ Keep all household data and account credentials outside both repositories.
    through port forwarding before enabling the TLS route. SQLite is single
    process; the deployment uses Recreate to avoid overlapping instances.
 5. Enable the route after confirming Gateway TLS and DNS configuration.
-   The proposed hostname is `fi.kleinsorge.dev`. Native local-account login
-   protects saved financial data; this app does not currently support Dex.
-   Do not assume proxy headers provide authentication. Confirm unauthenticated
-   requests to saved-plan endpoints return 401.
+   The proposed hostname is `fi.kleinsorge.dev`. Local-account login is the
+   default. Optional Dex/OIDC mode is enabled with `auth.enabled`; set the
+   issuer URL, client ID, existing owner email, and an immutable oauth2-proxy
+   image digest. Provision `auth.secretName` through the encrypted secret
+   workflow with `client-secret`, 32-byte `cookie-secret`, and a one-line
+   `allowed-emails` file containing only the lowercase owner email. Register
+   `https://<hostname>/oauth2/callback` with Dex. Add only DNS and issuer
+   destinations to `auth.egress`. In this mode the planner binds to loopback,
+   and the Service exposes only oauth2-proxy; the planner accepts a forwarded
+   identity only when it exactly matches the configured owner email. Confirm
+   unauthenticated requests are redirected to Dex and signed-in non-owner
+   requests cannot read saved plans.
 6. Verify an encrypted VolSync backup and a restore to a separate temporary
    claim. Snapshot copies must retain the entire data directory (SQLite plus
    any WAL files). Before upgrades also use `scripts/backup.py` for an online
