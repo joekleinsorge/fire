@@ -30,6 +30,7 @@ function renderTables() {
   if (typeof renderPurchases === 'function') renderPurchases();
   if (typeof renderSocialSecurity === 'function') renderSocialSecurity();
   if (typeof syncWhatIf === 'function') syncWhatIf();
+  if (typeof renderCheckup === 'function') renderCheckup();
   if (typeof renderProgressChart === 'function') renderProgressChart();
 }
 // Phase-1 tax model: one flat effective rate per account, applied by the engine as a withdrawal gross-up.

@@ -18,6 +18,7 @@ For Docker, run `docker compose up --build` and open the same URL. The Compose v
 
 - Six-input quick FI estimate with linked income, expense, savings, monthly-savings, and savings-rate edits, plus a savings-rate chart and annual table. The estimate can expand into a detailed plan.
 - Overview with net worth, spendable-asset progress, retirement spending target, projected FI timing, cash flow health, an asset projection, and annual details.
+- A plan checkup on the overview: rule-of-thumb health checks (emergency fund, high-interest debt, savings rate, fees, withdrawal rate and order, Social Security) and common moves (save more, trim flexible spending, retire a year later, lower fees, extra debt payments, invest excess cash, tax-efficient withdrawals, claim Social Security at 70), each projected on a copy of the plan and ranked by the years it brings FI forward, with apply and undo.
 - Editable cash, investment, retirement, property, and other assets; withdrawal order; and amortizing debts.
 - Recurring after-tax income and expense schedules with cadence, start/end months, real growth, essential status, and pause controls.
 - Retirement assumptions and seeded simulations with annual percentile bands and separate essential-spending, desired-lifestyle, and portfolio-survival outcomes.
