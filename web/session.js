@@ -103,6 +103,10 @@ $('auth-form').onsubmit = e => {
 $('register').onclick = () => auth(true);
 $('auth-close').onclick = () => $('auth-dialog').close();
 $('account-button').onclick = async () => {
+  if (oidcLogin) {
+    window.location.href = user ? '/oauth2/sign_out?rd=%2F' : '/oauth2/start?rd=%2F%3Fsso%3D1';
+    return;
+  }
   if (user) {
     try {
       await api('/api/auth/logout', {});
@@ -134,11 +138,19 @@ $('delete-plan').onclick = () => {
   $('confirm-dialog').showModal();
 };
 function openAuth() {
+  if (oidcLogin) {
+    window.location.href = '/oauth2/start?rd=%2F%3Fsso%3D1';
+    return;
+  }
   $('auth-dialog').showModal();
   $('email').focus();
 }
 function updateAuth() {
-  $('account-button').textContent = user ? 'Sign out · ' + user.email : 'Sign in to save';
+  $('account-button').textContent = user
+    ? 'Sign out · ' + user.email
+    : oidcLogin
+      ? 'Sign in with Dex'
+      : 'Sign in to save';
 }
 async function loadPlans() {
   if (!user) return;

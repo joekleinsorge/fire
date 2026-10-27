@@ -1,6 +1,7 @@
 'use strict';
 // Accounts, debts and cash flows: tables, the record editor and deletion.
 function renderTables() {
+  if (typeof renderHouseholdSource === 'function') renderHouseholdSource();
   const acc = plan.accounts || [],
     deb = plan.debts || [],
     streams = plan.streams || [];
@@ -14,7 +15,7 @@ function renderTables() {
   $('debts-table').innerHTML = deb
     .map(
       d =>
-        `<tr><td><strong>${esc(d.name)}</strong></td><td>${money(d.balance)}</td><td>${pct(d.annual_rate)}${d.inflation_rate != null ? `<small class="row-sub">${pct(d.inflation_rate)} inflation</small>` : ''}</td><td>${d.payment == null ? 'Calculated' : money(d.payment)}</td><td>${money(d.extra_payment)}</td><td class="row-actions"><button class="link-button" data-edit="debt" data-id="${esc(d.id)}">Edit</button><button class="link-button danger-text" data-delete="debt" data-id="${esc(d.id)}">Remove</button></td></tr>`,
+        `<tr><td><strong>${esc(d.name)}</strong>${d.balance_only ? '<small class="row-sub">Reference only · no payoff modeled</small>' : ''}</td><td>${money(d.balance)}</td><td>${pct(d.annual_rate)}${d.inflation_rate != null ? `<small class="row-sub">${pct(d.inflation_rate)} inflation</small>` : ''}</td><td>${d.payment == null ? 'Calculated' : money(d.payment)}</td><td>${money(d.extra_payment)}</td><td class="row-actions"><button class="link-button" data-edit="debt" data-id="${esc(d.id)}">Edit</button><button class="link-button danger-text" data-delete="debt" data-id="${esc(d.id)}">Remove</button></td></tr>`,
     )
     .join('');
   $('debts-empty').hidden = deb.length > 0;
@@ -69,6 +70,7 @@ const definitions = {
       ['balance', 'Current balance', 'number'],
       ['annual_rate', 'Annual interest rate (% as quoted)', 'percent'],
       ['inflation_rate', 'Expected inflation (% · blank uses plan)', 'percent'],
+      ['balance_only', 'Reference balance only (payments included in spending; no amortization)', 'check'],
       ['months', 'Months remaining', 'number'],
       ['payment', 'Required monthly payment (blank to calculate)', 'number'],
       ['extra_payment', 'Extra monthly payment', 'number'],
@@ -163,6 +165,17 @@ function openRecord(kind, id) {
     treatment.onchange = () => {
       taxInput.value = taxDefaults[treatment.value] * 100;
     };
+  if (kind === 'debt') {
+    const reference = $('dialog-fields').querySelector('[name="balance_only"]'),
+      months = $('dialog-fields').querySelector('[name="months"]');
+    if (row?.balance_only && row.months == null) months.value = '';
+    const syncReference = () => {
+      months.disabled = reference.checked;
+      months.required = !reference.checked;
+    };
+    reference.onchange = syncReference;
+    syncReference();
+  }
   $('dialog-fields')
     .querySelectorAll('[data-timing]')
     .forEach(sel => (sel.onchange = syncTimingInputs));

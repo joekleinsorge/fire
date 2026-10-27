@@ -12,11 +12,15 @@ async function startup() {
   $('observation-date').value = new Date().toISOString().slice(0, 10);
   let reopen = null;
   try {
-    const d = await api('/api/auth/me');
+    let d = await api('/api/auth/me');
+    oidcLogin = !!d.oidc;
+    if (oidcLogin && new URLSearchParams(location.search).has('sso')) d = await api('/api/auth/oidc');
     user = d.user;
     updateAuth();
-    const plans = await loadPlans();
-    reopen = (plans.find(p => p.id === rememberedPlan()) || plans[0])?.id;
+    if (user) {
+      const plans = await loadPlans();
+      reopen = (plans.find(p => p.id === rememberedPlan()) || plans[0])?.id;
+    }
   } catch {}
   if (reopen) {
     $('saved-plans').value = reopen;

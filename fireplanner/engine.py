@@ -639,6 +639,7 @@ def _debt_rows(plan, debts):
     rows = []
     for debt in debts:
         balance = number(debt.get('balance', 0), 'debt balance', 0, 1e15)
+        balance_only = _flag(debt, 'balance_only', False)
         nominal = number(debt.get('annual_rate', 0), 'debt annual_rate', 0, 10) / 12
         months = number(debt.get('months', 360), 'debt months', 1, 1800, True)
         payment = balance * nominal / (1 - (1 + nominal) ** -months) if nominal else balance / months
@@ -646,7 +647,8 @@ def _debt_rows(plan, debts):
             payment = number(debt['payment'], 'debt payment', 0, 1e15)
         deflator = (1 + number(debt.get('inflation_rate', _plan_inflation(plan)), 'debt inflation_rate', -.5, 1)) ** (1 / 12)
         rows.append(dict(balance=balance, rate=_real_rate(nominal, deflator), payment=payment, deflator=deflator,
-            extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance))
+            extra=number(debt.get('extra_payment', 0), 'extra_payment', 0, 1e15), months=months, origin=0, principal=balance,
+            balance_only=balance_only))
     return rows
 
 
@@ -758,6 +760,11 @@ def _service_debts(debt_rows, month, pay):
     totals = dict(payment=0.0, due=0.0, unfunded=0.0, interest=0.0, principal=0.0)
     ledger = []
     for debt in debt_rows:
+        if debt.get('balance_only'):
+            # A reference balance: its payments are already in spending, so it only counts toward net worth.
+            ledger.append(dict(opening=debt['balance'], interest=0.0, due=0.0, payment=0.0,
+                               principal=0.0, unfunded=0.0, balance=debt['balance'], balance_only=True))
+            continue
         if month <= debt['origin']:
             continue
         debt_open = debt['balance']

@@ -1,0 +1,33 @@
+# Set to the published linux/amd64 image digest before reconciling this chart.
+image: ""
+imagePullSecrets: []
+storageClass: longhorn
+storageSize: 2Gi
+# Keep serving disabled until the private SQLite database is installed.
+replicas: 0
+route:
+  enabled: false
+  hostname: fi.kleinsorge.dev
+  gatewayName: freshlab
+  gatewayNamespace: istio-system
+  dnsTarget: 192.168.1.228
+backup:
+  enabled: false
+  # Provision via Freshlab's SOPS secret workflow; never put credentials here.
+  repositorySecret: openfi-data-volsync-restic
+  schedule: "47 2,8,14,20 * * *"
+
+# Optional Dex/OIDC login. When enabled, the planner binds to pod loopback and
+# only oauth2-proxy is reachable through the Service.
+auth:
+  enabled: false
+  # Supply the OIDC issuer, existing owner account, and immutable proxy image.
+  issuerURL: ""
+  clientID: ""
+  ownerEmail: ""
+  proxyImage: ""
+  # Secret keys: client-secret, cookie-secret, allowed-emails (owner only).
+  secretName: ""
+  # NetworkPolicy egress rules for the OIDC issuer; DNS to kube-system is added.
+  # Example: [{to: [{ipBlock: {cidr: 10.0.0.25/32}}], ports: [{protocol: TCP, port: 5556}]}]
+  egress: []
