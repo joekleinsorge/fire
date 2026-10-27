@@ -1,5 +1,13 @@
 'use strict';
 // Plan assumptions form.
+function syncGuardrailFields() {
+  const f = $('assumptions-form'),
+    on = f.elements.spending_kind.value === 'guardrails';
+  for (const l of f.querySelectorAll('.guardrail-field')) {
+    l.hidden = !on;
+    l.querySelector('input').disabled = !on;
+  }
+}
 function fillAssumptions() {
   assumptionsPending = false;
   const f = $('assumptions-form');
@@ -9,6 +17,11 @@ function fillAssumptions() {
   f.elements.return_rate.value = (+plan.return_rate * 100).toFixed(1);
   f.elements.withdrawal_rate.value = (+plan.withdrawal_rate * 100).toFixed(1);
   f.elements.withdrawal_order.value = plan.withdrawal_order === 'tax_efficient' ? 'tax_efficient' : 'listed';
+  const rule = plan.spending_strategy || {};
+  f.elements.spending_kind.value = rule.kind === 'guardrails' ? 'guardrails' : 'fixed';
+  f.elements.spending_floor.value = Math.round((rule.floor ?? 0.7) * 100);
+  f.elements.spending_ceiling.value = Math.round((rule.ceiling ?? 1.2) * 100);
+  syncGuardrailFields();
   $('currency-display').value = plan.currency || 'USD';
 }
 async function applyAssumptions() {
@@ -32,6 +45,14 @@ async function applyAssumptions() {
   };
   if (d.get('withdrawal_order') === 'tax_efficient') candidate.withdrawal_order = 'tax_efficient';
   else delete candidate.withdrawal_order;
+  if (d.get('spending_kind') === 'guardrails')
+    candidate.spending_strategy = {
+      ...(plan.spending_strategy || {}),
+      kind: 'guardrails',
+      floor: +d.get('spending_floor') / 100,
+      ceiling: +d.get('spending_ceiling') / 100,
+    };
+  else delete candidate.spending_strategy;
   try {
     const result = await projectPlan(candidate);
     plan = candidate;
@@ -50,6 +71,7 @@ $('assumptions-form').onsubmit = e => {
   e.preventDefault();
   applyAssumptions();
 };
+$('assumptions-form').elements.spending_kind.onchange = syncGuardrailFields;
 $('assumptions-form').oninput = () => {
   assumptionsPending = true;
   markDirty();
