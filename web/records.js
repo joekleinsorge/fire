@@ -39,6 +39,7 @@ function renderTables() {
   if (typeof renderChildren === 'function') renderChildren();
   if (typeof renderPurchases === 'function') renderPurchases();
   if (typeof renderSocialSecurity === 'function') renderSocialSecurity();
+  if (typeof renderCheckup === 'function') renderCheckup();
   renderInputs();
 }
 const definitions = {

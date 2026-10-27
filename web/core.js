@@ -164,6 +164,18 @@ function tell(msg, error = false) {
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => (n.hidden = true), 6500);
 }
+function tellAction(msg, label, action) {
+  tell(msg);
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'link-button';
+  b.textContent = label;
+  b.onclick = () => {
+    b.disabled = true;
+    action();
+  };
+  $('notice').append(' ', b);
+}
 function markDirty() {
   workingDirty = true;
   $('save-state').textContent = 'Unsaved changes';

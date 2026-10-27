@@ -6,3 +6,5 @@ test:
 check: test
 	python3 -m compileall -q fireplanner
 	for f in web/*.js; do node --check $$f || exit 1; done
+	node tests/test_children_ui.js
+	node --test 'tests/web/*.test.mjs'
