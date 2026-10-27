@@ -50,3 +50,4 @@
 .wide-check{grid-column:1/-1;margin-top:4px}
 @media(max-width:600px){.panel-head{flex-wrap:wrap}.panel-head>.button-row{width:100%;justify-content:flex-start;flex-wrap:wrap}.panel-head>.button-row .button{flex:1 1 auto}.chart{min-height:0}.whatif-grid{gap:12px}}
 .model-notes{margin-top:8px;font-size:10px;color:var(--muted)}.model-notes summary{cursor:pointer;font-weight:600;color:var(--forest)}.model-notes ul{margin:6px 0 0;padding-left:16px}.model-notes li{margin:3px 0;line-height:1.4}
+label textarea{display:block;width:100%;background:#fbfcfa;border:1px solid #dce4dd;border-radius:5px;margin-top:5px;padding:10px;color:#29433a;font:12px/1.4 inherit;resize:vertical}

@@ -41,6 +41,46 @@ $('table-toggle').onclick = () => {
   $('table-toggle').textContent = on ? 'Hide annual figures ↑' : 'Show annual figures ↓';
   $('table-toggle').setAttribute('aria-expanded', String(on));
 };
+// Annual returns pasted by the user: numbers separated by commas, spaces or lines. A
+// series containing any value above 1.5 in magnitude is read as percentages.
+function parseReturns(text) {
+  const values = String(text || '').split(/[\s,;]+/).filter(Boolean).map(v => Number(v.replace('%', '')));
+  if (values.some(v => !Number.isFinite(v))) throw Error('Returns must be numbers, one per year.');
+  const percent = /%/.test(text) || values.some(v => Math.abs(v) > 1.5);
+  return values.map(v => (percent ? v / 100 : v));
+}
+function simulationSettings() {
+  const mode = $('sim-mode').value,
+    base = { trials: +$('trials').value, seed: +$('seed').value, mode };
+  if (mode === 'parametric') return { ...base, volatility: +$('volatility').value / 100 };
+  const returns = parseReturns($('sim-returns').value);
+  if (!returns.length) throw Error('Paste a series of annual returns for this method.');
+  if (mode === 'historical' && returns.length < +plan.horizon)
+    throw Error(`Historical periods need at least ${plan.horizon} years of returns for this plan; ${returns.length} supplied.`);
+  return { ...base, historical_returns: returns, ...(mode === 'block' ? { block_size: +$('sim-block').value } : {}) };
+}
+function syncSimulationFields() {
+  const mode = $('sim-mode').value;
+  for (const el of document.querySelectorAll('.sim-parametric')) el.hidden = mode !== 'parametric';
+  for (const el of document.querySelectorAll('.sim-history')) el.hidden = mode === 'parametric' || (el.querySelector('#sim-block') && mode !== 'block');
+  $('trials').disabled = mode === 'historical';
+  $('trials-note').textContent = mode === 'historical' ? 'Set by the number of complete windows in your series.' : '';
+  try {
+    localStorage.setItem('openfi:sim', JSON.stringify({ mode, returns: $('sim-returns').value, block: $('sim-block').value }));
+  } catch {}
+}
+try {
+  const stored = JSON.parse(localStorage.getItem('openfi:sim') || 'null');
+  if (stored) {
+    $('sim-mode').value = stored.mode || 'parametric';
+    $('sim-returns').value = stored.returns || '';
+    $('sim-block').value = stored.block || 5;
+  }
+} catch {}
+$('sim-mode').onchange = syncSimulationFields;
+$('sim-returns').oninput = syncSimulationFields;
+$('sim-block').oninput = syncSimulationFields;
+syncSimulationFields();
 async function runSimulation() {
   if (!user) {
     tell('Sign in and save this plan before running a simulation.', true);
@@ -51,12 +91,7 @@ async function runSimulation() {
     if (!(await ensureSaved())) return;
     const data = await api(`/api/plans/${saved.id}/run`, {
       kind: 'simulate',
-      settings: {
-        trials: +$('trials').value,
-        seed: +$('seed').value,
-        volatility: +$('volatility').value / 100,
-        mode: 'parametric',
-      },
+      settings: simulationSettings(),
     });
     pollJob(data.job.id, JSON.stringify(plan));
   } catch (e) {
