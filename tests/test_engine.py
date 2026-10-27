@@ -304,6 +304,73 @@ class SpendingStrategyTests(unittest.TestCase):
             project(self.plan(spending_strategy=dict(kind='percent')))
 
 
+class CoupleTests(unittest.TestCase):
+    def plan(self, **changes):
+        return dict(dict(age=60, retirement_age=60, horizon=10, return_rate=0, withdrawal_rate=.04,
+            accounts=[dict(type='investment', balance=2000000, return_rate=0)],
+            streams=[dict(kind='expense', amount=5000),
+                     dict(kind='income', amount=1000, owner='self'),
+                     dict(kind='income', amount=800, owner='partner')],
+            partner=dict(age=58)), **changes)
+
+    def test_a_couple_without_life_expectancies_is_unchanged(self):
+        single = self.plan()
+        single.pop('partner')
+        single['streams'] = [dict(row) for row in single['streams']]
+        single['streams'][2]['owner'] = 'self'
+        self.assertEqual(project(self.plan())['annual'], project(single)['annual'])
+
+    def test_first_death_ends_owned_income_and_scales_spending(self):
+        result = project(self.plan(partner=dict(age=58, life_expectancy=61), survivor_spending=.7))
+        months = result['monthly']
+        # The partner reaches 61 after 36 months, so month 37 is the first without them.
+        self.assertAlmostEqual(months[35]['income'], 1800)
+        self.assertAlmostEqual(months[36]['income'], 1000)
+        self.assertAlmostEqual(months[35]['expenses'], 5000)
+        self.assertAlmostEqual(months[36]['expenses'], 3500)
+
+    def test_survivor_keeps_the_larger_social_security_benefit(self):
+        benefits = [dict(id='me', name='Me', birth_year=1966, pia_at_fra=1500, claim_age_years=67, owner='self'),
+                    dict(id='you', name='You', birth_year=1968, pia_at_fra=2500, claim_age_years=67, owner='partner')]
+        plan = self.plan(age=66, horizon=10, partner=dict(age=64, life_expectancy=70), social_security=benefits,
+                         streams=[dict(kind='expense', amount=5000)])
+        months = project(plan)['monthly']
+        # Partner claims at 67 (month 37) and dies at 70 (month 73); I claim at 67 (month 13).
+        self.assertAlmostEqual(months[12]['income'], 1500)
+        self.assertAlmostEqual(months[40]['income'], 4000)
+        self.assertAlmostEqual(months[80]['income'], 2500)
+
+    def test_spousal_excess_while_both_are_alive(self):
+        from fireplanner.social_security import spousal_factor
+        self.assertAlmostEqual(spousal_factor(60), .65)
+        self.assertAlmostEqual(spousal_factor(36), .75)
+        self.assertEqual(spousal_factor(0), 1)
+        benefits = [dict(id='me', birth_year=1960, pia_at_fra=3000, claim_age_years=67, owner='self'),
+                    dict(id='you', birth_year=1960, pia_at_fra=1000, claim_age_years=62, owner='partner')]
+        plan = self.plan(age=62, horizon=8, partner=dict(age=62), social_security=benefits,
+                         streams=[dict(kind='expense', amount=5000)])
+        months = project(plan)['monthly']
+        own_early = 1000 * .70
+        # Partner claims at 62 (month 1); I file at 67 (month 61), when the partner is 67 too.
+        self.assertAlmostEqual(months[0]['income'], own_early)
+        self.assertAlmostEqual(months[60]['income'], own_early + 3000 + 500)
+        # A partner who first collects spousal benefits at 64 has them reduced for 36 months.
+        later = [dict(benefits[0], claim_age_years=64), benefits[1]]
+        months = project(dict(plan, social_security=later))['monthly']
+        self.assertAlmostEqual(months[24]['income'], own_early + 3000 * .8 + 500 * .75)
+        # No excess when the lower benefit is already at least half the higher one.
+        even = [benefits[0], dict(benefits[1], pia_at_fra=1600)]
+        self.assertAlmostEqual(project(dict(plan, social_security=even))['monthly'][60]['income'], 1600 * .7 + 3000)
+
+    def test_partner_owner_requires_a_partner(self):
+        plan = self.plan()
+        plan.pop('partner')
+        with self.assertRaisesRegex(ValueError, 'owner'):
+            project(plan)
+        with self.assertRaisesRegex(ValueError, 'life expectancy'):
+            project(self.plan(partner=dict(age=58, life_expectancy=50)))
+
+
 class FuturePurchaseTests(unittest.TestCase):
     def plan(self, **changes):
         return dict(dict(age=40, retirement_age=41, horizon=2, return_rate=0, withdrawal_rate=.04,

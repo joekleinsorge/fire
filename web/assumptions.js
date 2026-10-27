@@ -8,6 +8,14 @@ function syncGuardrailFields() {
     l.querySelector('input').disabled = !on;
   }
 }
+function syncPartnerFields() {
+  const f = $('assumptions-form'),
+    on = f.elements.has_partner.checked;
+  for (const l of f.querySelectorAll('.partner-field')) {
+    l.hidden = !on;
+    l.querySelector('input').disabled = !on;
+  }
+}
 function fillAssumptions() {
   assumptionsPending = false;
   const f = $('assumptions-form');
@@ -22,6 +30,14 @@ function fillAssumptions() {
   f.elements.spending_floor.value = Math.round((rule.floor ?? 0.7) * 100);
   f.elements.spending_ceiling.value = Math.round((rule.ceiling ?? 1.2) * 100);
   syncGuardrailFields();
+  const partner = plan.partner;
+  f.elements.has_partner.checked = !!partner;
+  f.elements.partner_name.value = partner?.name || '';
+  f.elements.partner_age.value = partner?.age ?? '';
+  f.elements.life_expectancy.value = plan.life_expectancy ?? '';
+  f.elements.partner_life_expectancy.value = partner?.life_expectancy ?? '';
+  f.elements.survivor_spending.value = Math.round((plan.survivor_spending ?? 0.7) * 100);
+  syncPartnerFields();
   $('currency-display').value = plan.currency || 'USD';
 }
 async function applyAssumptions() {
@@ -53,6 +69,33 @@ async function applyAssumptions() {
       ceiling: +d.get('spending_ceiling') / 100,
     };
   else delete candidate.spending_strategy;
+  let moved = 0;
+  if (d.get('has_partner')) {
+    if (d.get('partner_age') === '' || !(+d.get('partner_age') >= 0)) {
+      tell('Enter your partner’s current age.', true);
+      return false;
+    }
+    candidate.partner = {
+      ...(plan.partner || {}),
+      name: String(d.get('partner_name') || '').trim() || 'Partner',
+      age: +d.get('partner_age'),
+    };
+    if (d.get('partner_life_expectancy')) candidate.partner.life_expectancy = +d.get('partner_life_expectancy');
+    else delete candidate.partner.life_expectancy;
+    if (d.get('life_expectancy')) candidate.life_expectancy = +d.get('life_expectancy');
+    else delete candidate.life_expectancy;
+    candidate.survivor_spending = +d.get('survivor_spending') / 100;
+  } else if (candidate.partner) {
+    // Removing the partner gives what they owned to you.
+    for (const r of [...(candidate.streams || []), ...(candidate.social_security || [])])
+      if (r.owner === 'partner') {
+        r.owner = 'self';
+        moved++;
+      }
+    delete candidate.partner;
+    delete candidate.life_expectancy;
+    delete candidate.survivor_spending;
+  }
   try {
     const result = await projectPlan(candidate);
     plan = candidate;
@@ -60,7 +103,11 @@ async function applyAssumptions() {
     touch();
     projection = result;
     renderTables();
-    tell('Assumptions applied and projection updated. Save plan to keep changes.');
+    tell(
+      moved
+        ? `Assumptions applied. Partner removed; ${moved} item${moved === 1 ? '' : 's'} they owned now belong${moved === 1 ? 's' : ''} to you.`
+        : 'Assumptions applied and projection updated. Save plan to keep changes.',
+    );
     return true;
   } catch (err) {
     tell(err.message, true);
@@ -72,6 +119,7 @@ $('assumptions-form').onsubmit = e => {
   applyAssumptions();
 };
 $('assumptions-form').elements.spending_kind.onchange = syncGuardrailFields;
+$('assumptions-form').elements.has_partner.onchange = syncPartnerFields;
 $('assumptions-form').oninput = () => {
   assumptionsPending = true;
   markDirty();

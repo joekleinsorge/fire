@@ -177,6 +177,9 @@ function touch() {
   $('comparison-panel').hidden = true;
   renderSummary();
 }
+function personName(owner, p = plan) {
+  return owner === 'partner' ? p.partner?.name || 'Partner' : 'You';
+}
 function go(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));

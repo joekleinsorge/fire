@@ -213,6 +213,97 @@ def _purchases(plan):
     return normalized
 
 
+def _household(plan, p):
+    """People in the plan and when each planned lifetime ends.
+
+    Without a partner the plan is one person and nothing changes. With a partner, each
+    person may set a life expectancy; the first person to reach it ends their owned income
+    and Social Security from the month after, and household spending continues at
+    survivor_spending of plan. Ages are at the valuation date, like plan age.
+    """
+    partner = plan.get('partner')
+    if partner is None:
+        return dict(couple=False, ages=dict(self=p['age']), deaths={}, first_death=None, survivor_spending=1.0)
+    if not isinstance(partner, dict):
+        raise ValueError('partner must be an object')
+    ages = dict(self=p['age'], partner=number(partner.get('age'), 'partner age', 0, 150, True))
+    expectancies = dict(self=plan.get('life_expectancy'), partner=partner.get('life_expectancy'))
+    deaths = {}
+    for who, value in expectancies.items():
+        if value is None:
+            continue
+        value = number(value, f'{who} life_expectancy', 0, 150, True)
+        if value <= ages[who]:
+            raise ValueError('life expectancy must be after current age')
+        month = (value - ages[who]) * 12 + 1
+        if month <= p['horizon'] * 12:
+            deaths[who] = month
+    first = min(((m, who) for who, m in deaths.items()), default=None)
+    return dict(couple=True, ages=ages, deaths=deaths, first_death=first,
+                survivor_spending=number(plan.get('survivor_spending', 1), 'survivor_spending', 0, 1.5))
+
+
+def _owner(row, household, label):
+    owner = row.get('owner', 'self')
+    if owner not in ('self', 'partner') or (owner == 'partner' and not household['couple']):
+        raise ValueError(f'{label} owner must be self, or partner when the plan has one')
+    return owner
+
+
+def _household_streams(plan, p, streams, valuation, taxed):
+    """Owned income, Social Security, and lifetimes as plain stream rows.
+
+    Returns (streams, social_security, household). Claimed benefits become level monthly
+    income in today's dollars from the claim month. For a couple, each spouse may get a
+    spousal excess on the other's record while both are alive; at the first death that
+    person's owned income and benefit stop and the survivor keeps the larger benefit,
+    as a top-up to their own. With the tax model every benefit row is gross Social
+    Security income; otherwise benefits are after tax like any other stream.
+    """
+    household = _household(plan, p)
+    for stream in streams:
+        _owner(stream, household, 'stream')
+    if plan.get('_quick_adapter'):
+        return streams, [], household
+    end = p['horizon'] * 12 + 1
+    # Benefits given only a birth year are timed from their owner's age at valuation.
+    owner_age = lambda row: household['ages'][_owner(row, household, 'social security')]
+    social_security = ss_planning.normalize(plan, owner_age, p['horizon'] * 12, valuation, number)
+    raw = {row.get('id'): row for row in plan.get('social_security', [])}
+    for row in social_security:
+        row['owner'] = _owner(raw[row['id']], household, 'social security')
+    def benefit(ident, row_name, amount, start, stop, owner, enabled=True):
+        return dict(id=ident, name=row_name, kind='income', amount=amount, start_month=start, end_month=stop,
+                    every_months=1, growth_rate=0.0, enabled=enabled, essential=True, owner=owner,
+                    tax_kind='social_security' if taxed else None)
+    rows = list(streams) + [benefit('social-security:' + r['id'], r['name'], r['monthly_benefit'], r['start_month'], end,
+                                    r['owner'], r['enabled']) for r in social_security]
+    # A person's owned income (streams and their benefit) stops when their planned lifetime ends.
+    for i, row in enumerate(rows):
+        death = household['deaths'].get(row.get('owner', 'self'))
+        if death is not None and row.get('kind') == 'income' and death < row.get('end_month', end):
+            rows[i] = dict(row, end_month=max(row.get('start_month', 1), death))
+    first_death = household['first_death']
+    paid = lambda who: [r for r in social_security if r['enabled'] and r['owner'] == who]
+    if household['couple']:
+        for spouse, worker in (('self', 'partner'), ('partner', 'self')):
+            if not paid(spouse) or not paid(worker):
+                continue
+            amount, start = ss_planning.spousal_excess(paid(spouse)[0], paid(worker)[0])
+            stop = first_death[0] if first_death else end
+            if amount > 0 and start < stop:
+                rows.append(benefit('social-security-spousal:' + spouse, 'Spousal benefit', amount, start, stop, spouse))
+    if first_death:
+        died, survivor = first_death[1], 'partner' if first_death[1] == 'self' else 'self'
+        if paid(died) and paid(survivor):
+            gap = max(r['monthly_benefit'] for r in paid(died)) - max(r['monthly_benefit'] for r in paid(survivor))
+            start = max(first_death[0], min(r['start_month'] for r in paid(survivor)))
+            stop = household['deaths'].get(survivor, end)
+            if gap > 0 and start < stop:
+                rows.append(benefit('social-security-survivor:' + survivor, 'Survivor benefit', gap, start, stop, survivor))
+    return rows, social_security, household
+
+
 def _spending_strategy(plan):
     """Optional retirement spending rule; None means fixed spending (the default).
 
@@ -273,19 +364,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     contribution_ends = [number(a.get('contribution_end_month', 1), 'contribution_end_month', 1, 1801, True) for a in accounts]
     inflation = number(plan.get('inflation_rate', 0), 'inflation_rate', 0, .5)
     inflation_monthly = (1 + inflation) ** (1 / 12)
-    # Claimed benefits are level monthly income in today's dollars from the claim month.
-    # With the tax model they are gross Social Security income, taxed by provisional
-    # income; otherwise they are after-tax like any other stream.
-    social_security = [] if plan.get('_quick_adapter') else ss_planning.normalize(
-        plan, p['age'], p['horizon'] * 12, valuation, number)
     tax_config = plan.get('tax_model') or {}
     taxed = isinstance(tax_config, dict) and tax_config.get('enabled') is True
-    ss_streams = [dict(id='social-security:' + row['id'], name=row['name'], kind='income', amount=row['monthly_benefit'],
-                       start_month=row['start_month'], end_month=p['horizon'] * 12 + 1, every_months=1, growth_rate=0.0,
-                       enabled=row['enabled'], essential=True, tax_kind='social_security' if taxed else None)
-                  for row in social_security]
-    if ss_streams:
-        streams = list(streams) + ss_streams
+    streams, social_security, household = _household_streams(plan, p, streams, valuation, taxed)
+    survivor_from = household['first_death'][0] if household['first_death'] else None
     tax_ledger = taxes.TaxLedger(dict(plan, streams=streams), accounts)
     for i, a in enumerate(accounts):
         if is_personal_asset(a) and (access_ages[i] is not None or payroll_deposits[i] or household_deposits[i]):
@@ -393,8 +475,10 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     retirement_balance = initial if retirement_month == 0 else None
     retirement_start = retirement_month + 1
     retirement_streams = [row for row in normalized if row['enabled'] and row['start'] <= retirement_start < row['end']]
+    # Spending is already at the survivor level if the first death precedes retirement.
+    survivor_at_retirement = household['survivor_spending'] if survivor_from is not None and survivor_from <= retirement_start else 1.0
     def annualized_stream(row):
-        return row['amount'] * (1 + row['growth']) ** ((retirement_start - row['start']) / 12) * 12 / row['every']
+        return row['amount'] * (survivor_at_retirement if row['kind'] == 'expense' else 1.0) * (1 + row['growth']) ** ((retirement_start - row['start']) / 12) * 12 / row['every']
     annual_desired_spending = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'expense')
     annual_retirement_income = sum(annualized_stream(row) for row in retirement_streams if row['kind'] == 'income')
     if plan.get('_quick_adapter'):
@@ -461,6 +545,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
                 tax_ledger.deposit(i,payroll_deposits[i])
         due = [row for row in normalized if row['enabled'] and row['start'] <= month < row['end'] and (month-row['start']) % row['every'] == 0 and (not row['requires_purchase_id'] or any(p['id']==row['requires_purchase_id'] and p.get('closed') for p in purchases))]
         amounts = [(row, row['amount'] * (1 + row['growth']) ** ((month-row['start']) / 12)) for row in due]
+        if survivor_from is not None and month >= survivor_from:
+            amounts = [(row, value * household['survivor_spending'] if row['kind'] == 'expense' else value) for row, value in amounts]
         gross_taxable_income=sum(value for row,value in amounts if row['kind']=='income' and row['tax_kind'])
         income_taxes=tax_ledger.income_tax(month,gross_taxable_income) if tax_ledger.enabled else 0.0
         wage_net,wage_ids=tax_ledger.wage_net(month) if tax_ledger.enabled else (None,set())
@@ -783,7 +869,8 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             'Underfunded purchases add only funded cost to asset value; a partial value does not mean a purchase can close.',
             'Debt interest uses annual rate divided by 12; any balance is due at the end of its term.',
             'Property and other asset values use fixed assumed returns, are unavailable for spending, and have no automatic sale or linked debt.']
-            + (['Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars. With the tax model it is taxed as Social Security income; otherwise it is treated as after tax. The earnings test and spousal or survivor benefits are not modeled.'] if social_security else []))
+            + (['Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars. With the tax model it is taxed as Social Security income; otherwise it is treated as after tax. Spousal excess benefits are included for couples while both are alive and the survivor keeps the larger benefit; the earnings test, family maximum and survivor-benefit reductions are not modeled.'] if social_security else [])
+            + (['After a planned death the tax model still files jointly; survivor filing status is not modeled.'] if taxed and survivor_from is not None else []))
 
 
 def _percentile(values, p):

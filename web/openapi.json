@@ -2232,9 +2232,33 @@
                 "pia_at_fra": {"type": "number", "minimum": 0},
                 "claim_age_years": {"type": "integer", "minimum": 62, "maximum": 70},
                 "claim_age_months": {"type": "integer", "minimum": 0, "maximum": 11},
-                "enabled": {"type": "boolean"}
+                "enabled": {"type": "boolean"},
+                "owner": {"type": "string", "enum": ["self", "partner"], "default": "self"}
               }
             }
+          },
+          "partner": {
+            "type": "object",
+            "description": "A second person. Streams and social_security rows may set owner to partner.",
+            "properties": {
+              "name": {"type": "string"},
+              "age": {"type": "integer", "minimum": 0, "maximum": 150},
+              "life_expectancy": {"type": "integer", "minimum": 1, "maximum": 150}
+            },
+            "required": ["age"]
+          },
+          "life_expectancy": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 150,
+            "description": "Planned lifetime for the plan owner; used only when the plan has a partner."
+          },
+          "survivor_spending": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "default": 1,
+            "description": "Household spending after the first planned death, as a share of plan."
           },
           "spending_strategy": {
             "type": "object",

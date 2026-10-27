@@ -31,7 +31,7 @@ function renderTables() {
   $('streams-table').innerHTML = streams
     .map(
       s =>
-        `<tr><td><strong>${esc(s.name)}</strong>${s.enabled === false ? '<small class="row-sub">Paused</small>' : ''}</td><td><span class="kind ${s.kind}">${s.kind === 'income' ? 'Income' : 'Expense'}</span></td><td>${money(((+s.amount || 0) * 12) / (+s.every_months || 12))}</td><td>${esc(flowDateLabel(s.start_month || 1))}</td><td>${esc(flowDateLabel((s.end_month || plan.horizon * 12 + 1) - 1))}</td><td>${pct(s.growth_rate)}</td><td>${s.essential ? 'Yes' : 'No'}</td><td class="row-actions"><button class="link-button" data-edit="stream" data-id="${esc(s.id)}">Edit</button><button class="link-button danger-text" data-delete="stream" data-id="${esc(s.id)}">Remove</button></td></tr>`,
+        `<tr><td><strong>${esc(s.name)}</strong>${plan.partner ? `<small class="row-sub">${esc(personName(s.owner || 'self'))}</small>` : ''}${s.enabled === false ? '<small class="row-sub">Paused</small>' : ''}</td><td><span class="kind ${s.kind}">${s.kind === 'income' ? 'Income' : 'Expense'}</span></td><td>${money(((+s.amount || 0) * 12) / (+s.every_months || 12))}</td><td>${esc(flowDateLabel(s.start_month || 1))}</td><td>${esc(flowDateLabel((s.end_month || plan.horizon * 12 + 1) - 1))}</td><td>${pct(s.growth_rate)}</td><td>${s.essential ? 'Yes' : 'No'}</td><td class="row-actions"><button class="link-button" data-edit="stream" data-id="${esc(s.id)}">Edit</button><button class="link-button danger-text" data-delete="stream" data-id="${esc(s.id)}">Remove</button></td></tr>`,
     )
     .join('');
   $('streams-empty').hidden = streams.length > 0;
@@ -93,6 +93,7 @@ const definitions = {
       ['growth_rate', 'Annual real growth (%)', 'percent'],
       ['enabled', 'Include in plan', 'check'],
       ['essential', 'Essential (expenses)', 'check'],
+      ['owner', 'Belongs to', 'owner'],
     ],
   },
 };
@@ -159,6 +160,10 @@ function openRecord(kind, id) {
         if (!choices.has(+value)) choices.set(+value, `Every ${value} months`);
         return `<label>${label}<select name="${key}">${[...choices].map(([v, text]) => `<option value="${v}" ${v === +value ? 'selected' : ''}>${text}</option>`).join('')}</select></label>`;
       }
+      if (type === 'owner')
+        return plan.partner
+          ? `<label>${label}<select name="${key}">${['self', 'partner'].map(o => `<option value="${o}" ${o === (value || 'self') ? 'selected' : ''}>${esc(personName(o))}</option>`).join('')}</select><small>Their income stops at their planned life expectancy.</small></label>`
+          : '';
       if (type === 'check')
         return `<label class="check-label"><input name="${key}" type="checkbox" ${value ? 'checked' : ''}>${label}</label>`;
       if (type === 'select')
