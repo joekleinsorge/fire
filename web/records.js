@@ -38,6 +38,7 @@ function renderTables() {
   renderSummary();
   if (typeof renderChildren === 'function') renderChildren();
   if (typeof renderPurchases === 'function') renderPurchases();
+  if (typeof renderSocialSecurity === 'function') renderSocialSecurity();
   renderInputs();
 }
 const definitions = {

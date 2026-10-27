@@ -85,6 +85,21 @@ class TaxTests(unittest.TestCase):
         self.assertEqual(efficient["monthly"][6]["withdrawal_taxes"], 0)
         self.assertLess(efficient["summary"]["withdrawal_taxes"], listed["summary"]["withdrawal_taxes"])
 
+    def test_claimed_social_security_is_taxed_as_benefit_income(self):
+        accounts = [dict(id="ira", type="retirement", balance=500000, return_rate=0, available=True, tax_treatment="pretax")]
+        benefit = dict(id="ss", name="Me", birth_year=1960, pia_at_fra=3000, claim_age_years=62)
+        spend = [dict(kind="expense", amount=6000)]
+        with_ss = project(self.plan(age=62, retirement_age=62, accounts=accounts, streams=spend, social_security=[benefit]))
+        self.assertEqual(with_ss["social_security"][0]["start_month"], 1)
+        manual = project(self.plan(age=62, retirement_age=62, accounts=accounts, streams=spend + [dict(
+            id="manual", kind="income", amount=with_ss["social_security"][0]["monthly_benefit"],
+            tax_kind="social_security")]))
+        # The benefit is gross income in the tax model, taxed exactly like main's manual
+        # Social Security stream, so the year's withdrawals and tax match.
+        self.assertAlmostEqual(with_ss["summary"]["withdrawal_taxes"], manual["summary"]["withdrawal_taxes"], places=6)
+        self.assertAlmostEqual(with_ss["summary"]["ending_assets"], manual["summary"]["ending_assets"], places=6)
+        self.assertGreater(with_ss["tax_analysis"]["annual"][0]["taxable_social_security"], 0)
+
     def test_basis_deposits_and_tax_year_reset(self):
         p = self.plan(
             valuation_date="2026-10-15",

@@ -2217,6 +2217,25 @@
             "enum": ["listed", "tax_efficient"],
             "default": "listed"
           },
+          "social_security": {
+            "type": "array",
+            "maxItems": 10,
+            "description": "Claimed Social Security benefits from a statement PIA. Each becomes level monthly income in today's dollars from the claim month (SSA early reduction and delayed credits applied), taxed as Social Security income when tax_model is enabled.",
+            "items": {
+              "type": "object",
+              "required": ["id", "pia_at_fra", "claim_age_years"],
+              "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"},
+                "birth_date": {"type": "string", "format": "date"},
+                "birth_year": {"type": "integer", "minimum": 1943},
+                "pia_at_fra": {"type": "number", "minimum": 0},
+                "claim_age_years": {"type": "integer", "minimum": 62, "maximum": 70},
+                "claim_age_months": {"type": "integer", "minimum": 0, "maximum": 11},
+                "enabled": {"type": "boolean"}
+              }
+            }
+          },
           "spending_strategy": {
             "type": "object",
             "description": "Retirement spending rule. Guardrails compare the planned withdrawal rate at each retirement anniversary with the starting rate and scale discretionary (non-essential) spending within floor and ceiling.",
