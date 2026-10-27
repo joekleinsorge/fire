@@ -257,6 +257,53 @@ class FullEngineTests(unittest.TestCase):
         self.assertAlmostEqual(sum(row['unfunded'] for row in result['annual']),result['summary']['total_unfunded'])
 
 
+class SpendingStrategyTests(unittest.TestCase):
+    def plan(self, **changes):
+        # Retired from the start: 1,000,000 available, 40,000 essential and 20,000 discretionary.
+        return dict(dict(age=60, retirement_age=60, horizon=5, return_rate=0, withdrawal_rate=.04,
+            accounts=[dict(type='investment', balance=1000000, return_rate=-.15)],
+            streams=[dict(kind='expense', amount=40000 / 12, essential=True),
+                     dict(kind='expense', amount=20000 / 12, essential=False)]), **changes)
+
+    def test_fixed_spending_is_the_default(self):
+        self.assertEqual(project(self.plan())['annual'], project(self.plan(spending_strategy=dict(kind='fixed')))['annual'])
+
+    def test_guardrails_cut_discretionary_spending_after_losses(self):
+        rule = dict(kind='guardrails', band=.2, adjustment=.1, floor=.7, ceiling=1.2)
+        result = project(self.plan(spending_strategy=rule))
+        factors = [row['spending_factor'] for row in result['annual']]
+        # The rate starts at 6%; falling balances push it past 7.2% and trigger 10% cuts.
+        self.assertEqual(factors[0], 1.0)
+        self.assertLess(factors[-1], 1.0)
+        self.assertGreaterEqual(min(factors), .7)
+        self.assertAlmostEqual(result['summary']['lowest_spending_factor'], factors[-1])
+        months = result['monthly']
+        # Only the discretionary stream is scaled; essential spending is untouched.
+        for row in months:
+            self.assertAlmostEqual(row['essential_expenses'], 40000 / 12)
+            self.assertAlmostEqual(row['desired_expenses'], 20000 / 12 * row['spending_factor'])
+        fixed = project(self.plan())
+        self.assertGreater(result['summary']['ending_assets'], fixed['summary']['ending_assets'])
+
+    def test_guardrails_raise_spending_after_gains_up_to_the_ceiling(self):
+        rule = dict(kind='guardrails', band=.2, adjustment=.1, floor=.7, ceiling=1.2)
+        result = project(self.plan(accounts=[dict(type='investment', balance=1000000, return_rate=.4)], spending_strategy=rule))
+        factors = [row['spending_factor'] for row in result['annual']]
+        self.assertGreater(factors[-1], 1.0)
+        self.assertLessEqual(max(factors), 1.2)
+
+    def test_simulation_reports_spending_cuts(self):
+        rule = dict(kind='guardrails')
+        sim = simulate(self.plan(horizon=10, accounts=[dict(type='investment', balance=1000000, return_rate=.04)],
+                                 return_rate=.04, spending_strategy=rule), dict(trials=40, seed=3, volatility=.2))
+        cuts = sim['outcomes']['spending_cuts']
+        self.assertEqual(cuts['denominator'], 40)
+        self.assertTrue(0 < cuts['numerator'] <= 40)
+        self.assertLessEqual(cuts['median_lowest_factor'], 1)
+        with self.assertRaisesRegex(ValueError, 'spending_strategy'):
+            project(self.plan(spending_strategy=dict(kind='percent')))
+
+
 class FuturePurchaseTests(unittest.TestCase):
     def plan(self, **changes):
         return dict(dict(age=40, retirement_age=41, horizon=2, return_rate=0, withdrawal_rate=.04,

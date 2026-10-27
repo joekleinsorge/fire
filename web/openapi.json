@@ -2217,6 +2217,18 @@
             "enum": ["listed", "tax_efficient"],
             "default": "listed"
           },
+          "spending_strategy": {
+            "type": "object",
+            "description": "Retirement spending rule. Guardrails compare the planned withdrawal rate at each retirement anniversary with the starting rate and scale discretionary (non-essential) spending within floor and ceiling.",
+            "properties": {
+              "kind": {"type": "string", "enum": ["fixed", "guardrails"], "default": "fixed"},
+              "band": {"type": "number", "minimum": 0.01, "maximum": 0.9, "default": 0.2},
+              "adjustment": {"type": "number", "minimum": 0.01, "maximum": 0.5, "default": 0.1},
+              "floor": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.7},
+              "ceiling": {"type": "number", "minimum": 1, "maximum": 3, "default": 1.2}
+            },
+            "additionalProperties": false
+          },
           "archived_scenario_ids": {
             "type": "array",
             "items": {
