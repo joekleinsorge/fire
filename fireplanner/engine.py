@@ -587,8 +587,19 @@ def _household_income(plan, p, streams, normalized, valuation):
         death = household['deaths'].get(row['owner'])
         if death is not None and row['kind'] == 'income' and death < row['end']:
             row['end'] = max(row['start'], death)
-    # The survivor keeps the larger of the two benefits: top up their own by the difference.
     first_death = household['first_death']
+    # Each spouse may receive a spousal excess on the other's record while both are alive.
+    if household['couple']:
+        own = {who: [r for r in social_security if r['enabled'] and r['owner'] == who] for who in ('self', 'partner')}
+        for spouse, worker in (('self', 'partner'), ('partner', 'self')):
+            if not own[spouse] or not own[worker]:
+                continue
+            amount, start = ss_planning.spousal_excess(own[spouse][0], own[worker][0])
+            end = first_death[0] if first_death else p['horizon'] * 12 + 1
+            if amount > 0 and start < end:
+                normalized.append(dict(kind='income', amount=amount, start=start, end=end, every=1, growth=0.0,
+                                       enabled=True, essential=True, owner=spouse, benefit=True, spousal=True))
+    # The survivor keeps the larger of the two benefits: top up their own by the difference.
     if first_death:
         died, survivor = first_death[1], 'partner' if first_death[1] == 'self' else 'self'
         paid = lambda who: [r for r in social_security if r['enabled'] and r['owner'] == who]
@@ -1028,7 +1039,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
     if tax_model and tax_model['roth_conversion'] and 'roth' not in ledger.treatments:
         warnings.append('Roth conversions are set but the plan has no Roth account to receive them, so none were made.')
     if social_security:
-        warnings.append('Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars; taxation of benefits, the earnings test, and spousal or survivor benefits are not modeled.')
+        warnings.append('Social Security uses the entered full-retirement-age benefit adjusted for claiming age, level in today\'s dollars. Spousal excess benefits are included for couples while both are alive and the survivor keeps the larger benefit; the earnings test, family maximum and survivor-benefit reductions are not modeled, and benefits are taxed only in the federal tax model.')
     return dict(**target_fields, children=children, future_purchases=purchases, social_security=social_security, target_metadata=target_metadata, monthly=monthly, annual=annual, summary=summary, first_shortfall_month=first_shortfall,
         accumulation_shortfall=accumulation_shortfall,
         portfolio_survives=retirement_survives if has_window else None,

@@ -574,6 +574,28 @@ class CoupleTests(unittest.TestCase):
         self.assertAlmostEqual(months[40]['income'], 4000)
         self.assertAlmostEqual(months[80]['income'], 2500)
 
+    def test_spousal_excess_while_both_are_alive(self):
+        from fireplanner.social_security import spousal_factor
+        self.assertAlmostEqual(spousal_factor(60), .65)
+        self.assertAlmostEqual(spousal_factor(36), .75)
+        self.assertEqual(spousal_factor(0), 1)
+        benefits = [dict(id='me', birth_year=1960, pia_at_fra=3000, claim_age_years=67, owner='self'),
+                    dict(id='you', birth_year=1960, pia_at_fra=1000, claim_age_years=62, owner='partner')]
+        plan = self.plan(age=62, horizon=8, partner=dict(age=62), social_security=benefits,
+                         streams=[dict(kind='expense', amount=5000)])
+        months = project(plan)['monthly']
+        own_early = 1000 * .70
+        # Partner claims at 62 (month 1); I file at 67 (month 61), when the partner is 67 too.
+        self.assertAlmostEqual(months[0]['income'], own_early)
+        self.assertAlmostEqual(months[60]['income'], own_early + 3000 + 500)
+        # A partner who first collects spousal benefits at 64 has them reduced for 36 months.
+        later = [dict(benefits[0], claim_age_years=64), benefits[1]]
+        months = project(dict(plan, social_security=later))['monthly']
+        self.assertAlmostEqual(months[24]['income'], own_early + 3000 * .8 + 500 * .75)
+        # No excess when the lower benefit is already at least half the higher one.
+        even = [benefits[0], dict(benefits[1], pia_at_fra=1600)]
+        self.assertAlmostEqual(project(dict(plan, social_security=even))['monthly'][60]['income'], 1600 * .7 + 3000)
+
     def test_partner_owner_requires_a_partner(self):
         plan = self.plan()
         plan.pop('partner')
