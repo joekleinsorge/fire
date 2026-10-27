@@ -68,14 +68,25 @@ class APITest(unittest.TestCase):
                                cookie=self.request('POST','/api/auth/login',
                                    {'email':'owner@openfi.local','password':'correct horse battery'})[2])
         with patch.dict(os.environ,{'FIRE_OIDC_OWNER_EMAIL':'owner@openfi.local'}):
-            status,reply,_=self.request('GET','/api/auth/me',extra_headers={'X-Forwarded-Email':'joe@example.test'})
+            status,reply,_=self.request('GET','/api/auth/me',extra_headers={'X-Forwarded-Email':'OWNER@openfi.local'})
             self.assertEqual(status,200)
+            self.assertTrue(reply['oidc'])
             self.assertEqual(reply['user']['id'],owner['id'])
-            status,plans,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'joe@example.test'})
+            status,oidc,_=self.request('GET','/api/auth/oidc',extra_headers={'X-Forwarded-Email':'owner@openfi.local'})
+            self.assertEqual(status,200)
+            self.assertEqual(oidc['user']['id'],owner['id'])
+            status,plans,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'owner@openfi.local'})
             self.assertEqual(status,200)
             self.assertEqual(plans['plans'][0]['id'],saved['id'])
+            status,_reply,_=self.request('GET','/api/plans',extra_headers={'X-Forwarded-Email':'joe@example.test'})
+            self.assertEqual(status,401)
             status,reply,_=self.request('GET','/api/auth/me')
             self.assertIsNone(reply['user'])
+
+    def test_oidc_owner_mode_refuses_a_non_loopback_bind(self):
+        with patch.dict(os.environ,{'FIRE_OIDC_OWNER_EMAIL':'owner@example.com'}):
+            with self.assertRaisesRegex(ValueError,'loopback bind'):
+                make_server(host='0.0.0.0',port=0,database=Path(self.tmp.name)/'unsafe.db',workers=False)
 
     def test_editor_cannot_delete_plan_or_export_json(self):
         owner,cookie=self.register('delete-owner@example.com')
