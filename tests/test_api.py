@@ -166,6 +166,20 @@ class APITest(unittest.TestCase):
         self.assertEqual(os.stat(self.server.store.path).st_mode & 0o777,0o600)
         self.assertEqual(self.request('POST','/api/auth/login',{'email':'restart@example.com','password':'x'*1025})[0],403)
 
+    def test_repeated_failed_logins_are_refused_for_a_while(self):
+        self.register('guess@example.com')
+        self.register('other@example.com')
+        login = lambda email, password: self.request('POST', '/api/auth/login', dict(email=email, password=password))
+        for _ in range(5):
+            self.assertEqual(login('guess@example.com', 'wrong password!')[0], 403)
+        status, body, _ = login('GUESS@example.com', 'correct horse battery')
+        # Even the right password waits out the window, so guessing gains nothing.
+        self.assertEqual(status, 403)
+        self.assertIn('Too many failed sign-ins', body['error'])
+        self.assertEqual(login('other@example.com', 'correct horse battery')[0], 200)
+        self.server.store.failed_logins.clear()
+        self.assertEqual(login('guess@example.com', 'correct horse battery')[0], 200)
+
     def test_logout_revokes_session(self):
         _,cookie=self.register('logout@example.com')
         self.assertEqual(self.request('POST','/api/auth/logout',{},cookie)[0],200)

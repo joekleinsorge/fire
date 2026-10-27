@@ -21,7 +21,7 @@ python3 -m fireplanner.client get PLAN_ID
 python3 -m fireplanner.client project PLAN_ID --wait
 ```
 
-The login command prompts for your existing local password. It stores a 24-hour session in `~/.config/openfi/session.json` with owner-only permissions, never prints the token, and binds the session to that server URL. Use `--url http://127.0.0.1:PORT` before the command to select another port. `OPENFI_URL` and `OPENFI_API_TOKEN` are supported for scripts. `logout` revokes the token and removes the matching session file. Expired sessions require another login.
+The login command prompts for your existing local password. After five wrong passwords for one email in 15 minutes, sign-in for that email is refused until the window passes. It stores a 24-hour session in `~/.config/openfi/session.json` with owner-only permissions, never prints the token, and binds the session to that server URL. Use `--url http://127.0.0.1:PORT` before the command to select another port. `OPENFI_URL` and `OPENFI_API_TOKEN` are supported for scripts. `logout` revokes the token and removes the matching session file. Expired sessions require another login.
 
 Claude or Codex can invoke the same client commands once you have signed in. Give the assistant the repository path and the saved plan ID from Settings. It can read the complete plan, make a proposed change, calculate it, and submit the update. Keep downloaded financial JSON and session files outside version control. This repository's `data/` directory is ignored.
 

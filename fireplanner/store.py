@@ -7,6 +7,7 @@ import math
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -35,8 +36,15 @@ def run_summary(result):
 
 
 class Store:
+    # Repeated wrong passwords for one email are refused for a while, so a password cannot
+    # be guessed at full speed. Counts live in memory and reset when the server restarts.
+    LOGIN_ATTEMPTS = 5
+    LOGIN_WINDOW = 15 * 60
+
     def __init__(self, path):
         self.path = str(path)
+        self.failed_logins = {}
+        self.login_lock = threading.Lock()
         parent=Path(self.path).parent
         parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         # Create private database storage before SQLite can apply a permissive umask.
@@ -90,14 +98,27 @@ class Store:
         return user
 
     def login(self, email, password):
+        key = email.strip().lower()
+        now = time.time()
+        with self.login_lock:
+            recent = [t for t in self.failed_logins.get(key, []) if now - t < self.LOGIN_WINDOW]
+            if len(recent) >= self.LOGIN_ATTEMPTS:
+                wait = math.ceil((recent[0] + self.LOGIN_WINDOW - now) / 60)
+                raise PermissionError(f'Too many failed sign-ins; try again in {wait} minute{"s" if wait != 1 else ""}')
         if len(password) > 1024:
             raise PermissionError('Invalid email or password')
         with self.connect() as db:
-            row = db.execute('SELECT * FROM users WHERE email=?', (email.strip().lower(),)).fetchone()
+            row = db.execute('SELECT * FROM users WHERE email=?', (key,)).fetchone()
         # Perform the same expensive hash for unknown users.
         stored = row['password'] if row else '00' * 16 + ':' + '00' * 32
         if not hmac.compare_digest(self.password(password, stored.split(':')[0]), stored) or not row:
+            with self.login_lock:
+                if len(self.failed_logins) > 10000:
+                    self.failed_logins = {k: v for k, v in self.failed_logins.items() if now - v[-1] < self.LOGIN_WINDOW}
+                self.failed_logins[key] = [t for t in self.failed_logins.get(key, []) if now - t < self.LOGIN_WINDOW] + [now]
             raise PermissionError('Invalid email or password')
+        with self.login_lock:
+            self.failed_logins.pop(key, None)
         return {k: row[k] for k in ('id', 'email', 'household', 'role')}
 
     def session(self, user):
