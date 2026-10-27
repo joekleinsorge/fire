@@ -8,6 +8,7 @@ function fillAssumptions() {
   f.elements.retirement_age.value = plan.retirement_age;
   f.elements.return_rate.value = (+plan.return_rate * 100).toFixed(1);
   f.elements.withdrawal_rate.value = (+plan.withdrawal_rate * 100).toFixed(1);
+  f.elements.withdrawal_order.value = plan.withdrawal_order === 'tax_efficient' ? 'tax_efficient' : 'listed';
   $('currency-display').value = plan.currency || 'USD';
 }
 async function applyAssumptions() {
@@ -29,6 +30,8 @@ async function applyAssumptions() {
     return_rate: +d.get('return_rate') / 100,
     withdrawal_rate: +d.get('withdrawal_rate') / 100,
   };
+  if (d.get('withdrawal_order') === 'tax_efficient') candidate.withdrawal_order = 'tax_efficient';
+  else delete candidate.withdrawal_order;
   try {
     const result = await projectPlan(candidate);
     plan = candidate;

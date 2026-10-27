@@ -301,6 +301,25 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
         if len(matches) != 1 or not accessible[matches[0]] or accounts[matches[0]].get('type') not in ('cash', 'investment'):
             raise ValueError(f'{key} must reference one currently available cash or investment account')
         return matches[0]
+    order = plan.get('withdrawal_order', 'listed')
+    if order not in ('listed', 'tax_efficient'):
+        raise ValueError('withdrawal_order must be listed or tax_efficient')
+    # A tax-efficient order spends cash first, then taxable, then pre-tax, then Roth, and
+    # restricted holdings last, keeping the listed order within each group. Accounts without
+    # a tax_treatment rank by type: cash, investment as taxable, retirement as pre-tax.
+    # Surplus deposits still go to the first listed account. The overflow cash bucket
+    # (index len(accounts)) is cash.
+    treatment_rank = dict(cash=0, taxable=1, pretax=2, roth_qualified=3, restricted=4)
+    type_rank = dict(cash=0, investment=1, retirement=2)
+    def order_key(i):
+        if i >= len(accounts):
+            return 0
+        treatment = accounts[i].get('tax_treatment')
+        if treatment is None:
+            return type_rank.get(accounts[i].get('type', 'investment'), 1)
+        return treatment_rank.get(treatment, 4)
+    def withdrawal_sequence(indices):
+        return indices if order == 'listed' else sorted(indices, key=order_key)
     surplus_index = allocation_index('surplus_account_id')
     reserve_index = allocation_index('reserve_account_id')
     reserve_target = number(plan.get('cash_reserve_target', 0), 'cash_reserve_target', 0, 1e15)
@@ -420,7 +439,7 @@ def _full_projection(plan, p, rates=None, retain_monthly=True):
             from_income = min(cash, amount)
             cash -= from_income
             remaining = amount - from_income
-            for i in (available_indices if allowed_indices is None else allowed_indices):
+            for i in withdrawal_sequence(available_indices if allowed_indices is None else allowed_indices):
                 if tax_ledger.enabled and i < len(accounts):
                     taken,withheld = tax_ledger.draw(i,remaining,balances[i],month)
                 else:
