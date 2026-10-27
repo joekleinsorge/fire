@@ -92,6 +92,53 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(result['outcomes']['portfolio_survives']['rate'])
         self.assertEqual(result['outcomes']['portfolio_survives']['excluded'],2)
 
+class ReturnBasisTests(unittest.TestCase):
+    plan = dict(age=40, retirement_age=70, horizon=10, return_rate=.05,
+                accounts=[dict(type='investment', balance=100000, return_rate=.05)], streams=[])
+
+    def test_geometric_median_matches_the_fixed_projection(self):
+        fixed = project(self.plan)['summary']['ending_assets']
+        sim = simulate(self.plan, dict(trials=1000, seed=7, volatility=.15))
+        self.assertAlmostEqual(sim['ending_assets']['median'] / fixed, 1, delta=.04)
+        self.assertEqual(sim['metadata']['settings']['return_basis'], 'geometric')
+
+    def test_arithmetic_basis_compounds_below_the_mean(self):
+        fixed = project(self.plan)['summary']['ending_assets']
+        sim = simulate(self.plan, dict(trials=1000, seed=7, volatility=.15, return_basis='arithmetic'))
+        # Volatility drag of about 0.15**2 / 2 a year over 10 years.
+        self.assertAlmostEqual(sim['ending_assets']['median'] / fixed, (1 - .15 ** 2 / 2 / 1.05) ** 10, delta=.04)
+        with self.assertRaisesRegex(ValueError, 'return_basis'):
+            simulate(self.plan, dict(trials=1, return_basis='median'))
+
+
+class SequenceStressTests(unittest.TestCase):
+    def plan(self, **changes):
+        # Retired at 65 in year 5 of the plan with 1,000,000 and 45,000 a year of spending.
+        return dict(dict(age=60, retirement_age=65, horizon=30, return_rate=.04,
+            accounts=[dict(type='investment', balance=1000000, return_rate=.04)],
+            streams=[dict(kind='expense', amount=45000 / 12, start_month=61)]), **changes)
+
+    def test_shock_replaces_the_first_retirement_years(self):
+        result = simulate(self.plan(), dict(mode='sequence'))
+        self.assertEqual(result['completed'], 1)
+        settings = result['metadata']['settings']
+        self.assertEqual(settings['shock_returns'], [-.15, -.13, -.24])
+        self.assertEqual(settings['shock_start_year'], 5)
+        fixed = project(self.plan())['annual']
+        stressed = result['paths'][0]['annual']
+        # Identical until retirement, then lower after the shock.
+        for year in range(5):
+            self.assertAlmostEqual(stressed[year]['balance'], fixed[year]['balance'], places=6)
+        self.assertLess(stressed[7]['balance'], fixed[7]['balance'] * .7)
+
+    def test_a_shock_can_break_a_plan_the_fixed_projection_funds(self):
+        self.assertTrue(project(self.plan())['portfolio_survives'])
+        heavy = simulate(self.plan(), dict(mode='sequence', shock_returns=[-.4, -.3, -.2]))
+        self.assertFalse(heavy['outcomes']['portfolio_survives']['rate'])
+        with self.assertRaisesRegex(ValueError, 'shock_returns'):
+            simulate(self.plan(), dict(mode='sequence', shock_returns=[]))
+
+
 class FullEngineTests(unittest.TestCase):
     def plan(self, **changes):
         return dict(dict(age=40, retirement_age=41, horizon=2, return_rate=0,

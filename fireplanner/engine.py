@@ -10,7 +10,7 @@ from . import children as child_planning
 from . import taxes
 from . import social_security as ss_planning
 
-VERSION = '2.3.0'
+VERSION = '2.4.0'
 
 
 def is_personal_asset(account):
@@ -901,12 +901,26 @@ def simulate(plan, settings=None):
         raise ValueError('simulation exceeds 500000 annual observations')
     seed = number(settings.get('seed', 0), 'seed', 0, 2**53 - 1, True)
     mode = settings.get('mode', 'parametric')
-    if mode not in ('parametric', 'resampling', 'block', 'historical'):
+    if mode not in ('parametric', 'resampling', 'block', 'historical', 'sequence'):
         raise ValueError('unsupported simulation mode')
     mean = number(settings.get('mean', p['return_rate']), 'mean', -.99, 10)
     volatility = number(settings.get('volatility', .15), 'volatility', 0, 3)
+    # Plan and account returns compound like a growth rate, so by default the simulated
+    # median annual return equals `mean` and the fixed projection is the median path for a
+    # single portfolio. 'arithmetic' instead makes `mean` the expected (average) annual
+    # return, whose median compounds about volatility**2 / 2 lower.
+    return_basis = settings.get('return_basis', 'geometric')
+    if return_basis not in ('geometric', 'arithmetic'):
+        raise ValueError('return_basis must be geometric or arithmetic')
+    if return_basis == 'geometric':
+        spread = volatility / (1 + mean)
+        sigma = math.sqrt(math.log((1 + math.sqrt(1 + 4 * spread * spread)) / 2))
+        log_mean = math.log1p(mean)
+    else:
+        sigma = math.sqrt(math.log1p((volatility / (1 + mean)) ** 2))
+        log_mean = math.log1p(mean) - sigma * sigma / 2
     history = settings.get('historical_returns', [])
-    if mode != 'parametric':
+    if mode not in ('parametric', 'sequence'):
         if not isinstance(history, list) or not history or len(history) > 10000:
             raise ValueError('resampling requires supplied annual historical_returns')
         history = [number(x, 'historical return', -1, 10) for x in history]
@@ -918,6 +932,15 @@ def simulate(plan, settings=None):
         raise ValueError('full-mode essential spending is defined by expense streams')
     essential = (None if full else
         number(settings.get('essential_expenses', p['expenses']), 'essential_expenses', 0, p['expenses']))
+    if mode == 'sequence':
+        # One deterministic path: the plan return every year except shock_returns, which
+        # start in the first year of retirement (or shock_start_year) and replace it.
+        shock = settings.get('shock_returns', [-.15, -.13, -.24])
+        if not isinstance(shock, list) or not 1 <= len(shock) <= 30:
+            raise ValueError('shock_returns must list 1-30 annual returns')
+        shock = [number(x, 'shock return', -.99, 10) for x in shock]
+        shock_start = number(settings.get('shock_start_year', min(retirement_year, p['horizon'] - 1)), 'shock_start_year', 0, p['horizon'] - 1, True)
+        trials = 1
     if mode == 'historical':
         trials = max(0, len(history) - p['horizon'] + 1)
         if trials > 5000 or trials * p['horizon'] > 500000:
@@ -930,11 +953,13 @@ def simulate(plan, settings=None):
         rates = []
         while len(rates) < p['horizon']:
             if mode == 'parametric':
-                # Lognormal gross returns: mean is expected arithmetic annual return.
-                sigma = math.sqrt(math.log1p((volatility / (1 + mean)) ** 2))
-                rates.append(math.exp(rng.gauss(math.log1p(mean) - sigma * sigma / 2, sigma)) - 1)
+                # Lognormal gross returns with standard deviation `volatility`.
+                rates.append(math.exp(rng.gauss(log_mean, sigma)) - 1)
             elif mode == 'historical':
                 rates = history[trial:trial + p['horizon']]
+            elif mode == 'sequence':
+                rates = [mean] * p['horizon']
+                rates[shock_start:shock_start + len(shock)] = shock[:p['horizon'] - shock_start]
             elif mode == 'resampling':
                 rates.append(rng.choice(history))
             else:
@@ -1004,10 +1029,14 @@ def simulate(plan, settings=None):
             definition='Paths where the guardrail rule cut discretionary spending below plan at least once')
     meta = metadata(original_plan, mode)
     setting_metadata = dict(settings, trials=trials, seed=seed, mode=mode, retirement_year=retirement_year)
+    if mode == 'parametric':
+        setting_metadata['return_basis'] = return_basis
+    if mode == 'sequence':
+        setting_metadata.update(shock_returns=shock, shock_start_year=shock_start)
     if essential is not None:
         setting_metadata['essential_expenses'] = essential
     meta.update(settings=setting_metadata, random_generator='python.Random MT19937; per-trial string seed v1',
-        distribution='lognormal gross return, arithmetic mean and standard deviation' if mode == 'parametric' else ('annual supplied returns, rolling consecutive complete windows; incomplete windows excluded' if mode == 'historical' else 'annual supplied returns with replacement; overlapping non-wrapping blocks for block mode'),
+        distribution=('lognormal gross return; median annual return equals mean (compound/geometric basis)' if return_basis == 'geometric' else 'lognormal gross return; mean is the expected arithmetic annual return') + ', standard deviation volatility' if mode == 'parametric' else ('one path at the plan return with shock_returns from shock_start_year' if mode == 'sequence' else 'annual supplied returns, rolling consecutive complete windows; incomplete windows excluded' if mode == 'historical' else 'annual supplied returns with replacement; overlapping non-wrapping blocks for block mode'),
         history_digest=hashlib.sha256(json.dumps(history).encode()).hexdigest())
     incomplete = [dict(start_index=i, available_years=len(history)-i, required_years=p['horizon']) for i in range(trials, len(history))] if mode == 'historical' else []
     annual_bands = [dict(year=year+1, age=p['age']+year+1, **{name: _percentile([path['annual'][year]['balance'] for path in paths], fraction) for name, fraction in (('p10',.1),('median',.5),('p90',.9))}) for year in range(p['horizon'])] if full and paths else []

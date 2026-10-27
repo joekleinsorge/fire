@@ -29,7 +29,11 @@ export function load(...files) {
     confirm: () => true,
     fetch: () => Promise.reject(new Error('network disabled in tests')),
   });
-  for (const file of files) vm.runInContext(readFileSync(new URL(file, WEB), 'utf8'), context, {filename: file});
+  // A file name loads web/<file>; an object's `source` runs inline (stubs for scripts not loaded).
+  for (const file of files)
+    typeof file === 'string'
+      ? vm.runInContext(readFileSync(new URL(file, WEB), 'utf8'), context, {filename: file})
+      : vm.runInContext(file.source, context, {filename: 'stub.js'});
   // Top-level const/let live in the context's lexical scope, so read them by evaluation.
   return source => vm.runInContext(source, context);
 }

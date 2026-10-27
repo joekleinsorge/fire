@@ -24,7 +24,7 @@ async function watchSavedRun(id,applyToPlan=false,inputSnapshot=null){
 }
 async function startScenarioRun(id,kind='project'){
   if(!saved){openAuth();return}const data={kind,metadata:{origin:'planner UI'}};
-  if(kind==='simulate')data.settings={mode:'parametric',trials:+$('trials').value,seed:+$('seed').value,volatility:+$('volatility').value/100};
+  if(kind==='simulate')data.settings=simulationSettings();
   const {job}=await api(`/api/plans/${saved.id}/scenarios/${encodeURIComponent(id)}/run`,data);await refreshRuns();watchSavedRun(job.id).catch(e=>tell(e.message,true));return job;
 }
 async function logPlanProjection(){

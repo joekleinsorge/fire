@@ -189,6 +189,20 @@ function touch() {
   $('comparison-panel').hidden = true;
   renderSummary();
 }
+// Your income that stops the month retirement starts (take-home pay, say) is tied to the
+// retirement age: moving the age moves those end months. Returns the names that moved.
+function moveRetirementIncome(p, fromAge, toAge, age = p.age) {
+  const from = (+fromAge - +age) * 12 + 1,
+    to = (+toAge - +age) * 12 + 1,
+    moved = [];
+  if (from === to) return moved;
+  for (const s of p.streams || [])
+    if (s.kind === 'income' && (s.owner || 'self') === 'self' && +s.end_month === from && (+s.start_month || 1) < Math.max(to, 2)) {
+      s.end_month = Math.max(1, to);
+      moved.push(s.name || 'Income');
+    }
+  return moved;
+}
 function personName(owner, p = plan) {
   return owner === 'partner' ? p.partner?.name || 'Partner' : 'You';
 }
