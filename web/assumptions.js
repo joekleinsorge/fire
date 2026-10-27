@@ -69,6 +69,7 @@ async function applyAssumptions() {
       ceiling: +d.get('spending_ceiling') / 100,
     };
   else delete candidate.spending_strategy;
+  const incomeMoved = d.get('move_income') ? moveRetirementIncome(candidate, plan.retirement_age, retire, plan.age) : [];
   let moved = 0;
   if (d.get('has_partner')) {
     if (d.get('partner_age') === '' || !(+d.get('partner_age') >= 0)) {
@@ -104,9 +105,10 @@ async function applyAssumptions() {
     projection = result;
     renderTables();
     tell(
-      moved
+      (moved
         ? `Assumptions applied. Partner removed; ${moved} item${moved === 1 ? '' : 's'} they owned now belong${moved === 1 ? 's' : ''} to you.`
-        : 'Assumptions applied and projection updated. Save plan to keep changes.',
+        : 'Assumptions applied and projection updated. Save plan to keep changes.') +
+        (incomeMoved.length ? ` ${incomeMoved.join(', ')} now end${incomeMoved.length === 1 ? 's' : ''} at ${retire}.` : ''),
     );
     return true;
   } catch (err) {

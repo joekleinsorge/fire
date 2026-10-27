@@ -38,6 +38,66 @@ function renderScenarios() {
     wrap.append(el);
   }
 }
+function scenarioChanges() {
+  return {
+    retire: $('scenario-retire').value === '' ? null : +$('scenario-retire').value,
+    spend: +$('scenario-spend').value || 0,
+    save: +$('scenario-save').value || 0,
+    ret: +$('scenario-return').value || 0,
+    ss: $('scenario-ss').value === '' ? null : +$('scenario-ss').value,
+  };
+}
+// Applies the dialog's changes to a copy of `base`; returns the copy and a plain summary.
+function applyScenarioChanges(base, c) {
+  const p = structuredClone(base),
+    summary = [];
+  if (c.retire != null && c.retire !== +p.retirement_age) {
+    const moved = moveRetirementIncome(p, p.retirement_age, c.retire);
+    p.retirement_age = c.retire;
+    summary.push(`Retire at ${c.retire}${moved.length ? ` (${moved.join(', ')} ends then)` : ''}`);
+  }
+  if (c.spend) {
+    for (const s of p.streams || [])
+      if (s.kind === 'expense') s.amount = Math.round((+s.amount || 0) * (100 + c.spend)) / 100;
+    summary.push(`Spending ${c.spend > 0 ? '+' : ''}${c.spend}%`);
+  }
+  if (c.save > 0) {
+    const months = Math.max(1, (+p.retirement_age - +p.age) * 12);
+    p.streams = [...(p.streams || []), { id: uid(), name: 'Extra savings (scenario)', kind: 'income', amount: c.save,
+      every_months: 1, start_month: 1, end_month: months + 1, growth_rate: 0, enabled: true, essential: false }];
+    summary.push(`Save ${money(c.save)} more a month`);
+  }
+  if (c.ret) {
+    p.return_rate = (+p.return_rate || 0) + c.ret / 100;
+    for (const a of p.accounts || [])
+      if (['investment', 'retirement'].includes(a.type || 'investment'))
+        a.return_rate = (a.return_rate ?? base.return_rate) + c.ret / 100;
+    summary.push(`Returns ${c.ret > 0 ? '+' : ''}${c.ret} points`);
+  }
+  if (c.ss != null && (p.social_security || []).length) {
+    for (const r of p.social_security) Object.assign(r, { claim_age_years: c.ss, claim_age_months: 0 });
+    summary.push(`Claim Social Security at ${c.ss}`);
+  }
+  return { plan: p, summary };
+}
+function openScenarioDialog() {
+  if (!user) return openAuth();
+  const source = $('scenario-source'),
+    edits = !!saved && workingDirty;
+  source.querySelector('[value="working"]').disabled = !edits;
+  source.value = edits ? 'working' : 'saved';
+  $('scenario-source-note').textContent = saved
+    ? 'Your saved plan stays the baseline either way.'
+    : 'Your plan is saved first and becomes the baseline.';
+  $('scenario-retire').value = plan.retirement_age;
+  for (const id of ['scenario-spend', 'scenario-save', 'scenario-return']) $(id).value = '0';
+  $('scenario-ss').value = '';
+  $('scenario-ss-label').hidden = !(plan.social_security || []).length;
+  $('scenario-name').value = '';
+  $('scenario-dialog').showModal();
+}
+// A scenario is a changed copy compared with the saved plan. Creating one never saves
+// your unsaved edits into the baseline; choose "My unsaved edits" to use them instead.
 async function saveScenario() {
   const name = $('scenario-name').value.trim();
   if (!name) {
@@ -49,24 +109,31 @@ async function saveScenario() {
       openAuth();
       return;
     }
-    if (!(await savePlan()) || workingDirty) return;
+    if (!saved && (!(await savePlan()) || !saved)) return;
+    const base = $('scenario-source').value === 'working' ? plan : saved.plan,
+      { plan: candidate, summary } = applyScenarioChanges(base, scenarioChanges());
     const reply = await api(`/api/plans/${saved.id}/scenarios`, {
         name,
-        plan: structuredClone(plan),
+        plan: candidate,
         baseline_plan: saved.plan,
         base_version: saved.version,
-        metadata: { origin: 'planner UI' },
+        metadata: {
+          origin: 'planner UI',
+          rationale:
+            (base === plan && workingDirty ? 'Unsaved edits' + (summary.length ? ' · ' : '') : '') +
+            (summary.join(' · ') || (base === plan && workingDirty ? '' : 'Unchanged copy of the saved plan')),
+        },
       }),
       scenario = reply.scenario;
     $('scenario-dialog').close();
     await refreshScenarios();
     await startScenarioRun(scenario.id);
-    tell('Scenario saved; its projection has been queued and logged.');
+    tell('Scenario saved and compared with your saved plan; its projection is logged.');
   } catch (e) {
     tell(e.message, true);
   }
 }
-$('save-scenario').onclick = $('new-scenario').onclick = () => (user ? $('scenario-dialog').showModal() : openAuth());
+$('save-scenario').onclick = $('new-scenario').onclick = openScenarioDialog;
 $('scenario-form').onsubmit = e => {
   e.preventDefault();
   saveScenario();

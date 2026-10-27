@@ -40,6 +40,19 @@ $('table-toggle').onclick = () => {
   $('table-toggle').textContent = on ? 'Hide annual figures ↑' : 'Show annual figures ↓';
   $('table-toggle').setAttribute('aria-expanded', String(on));
 };
+// Settings shared by plan and scenario simulations so every test uses the same markets.
+function simulationSettings() {
+  if ($('sim-mode').value === 'sequence') return { mode: 'sequence', shock_returns: [-0.15, -0.13, -0.24] };
+  return { mode: 'parametric', trials: +$('trials').value, seed: +$('seed').value, volatility: +$('volatility').value / 100 };
+}
+function syncSimulationMode() {
+  const stress = $('sim-mode').value === 'sequence';
+  document.querySelectorAll('.random-field').forEach(l => (l.hidden = stress));
+  $('sim-mode-note').textContent = stress
+    ? 'One path: −15%, −13%, −24% real in the first three retirement years.'
+    : 'Independent yearly returns around your assumptions.';
+}
+$('sim-mode').onchange = syncSimulationMode;
 async function runSimulation() {
   if (!saved) {
     tell('Sign in and save this plan before running a simulation.', true);
@@ -52,12 +65,7 @@ async function runSimulation() {
       kind: 'simulate',
       version: saved.version,
       metadata: { origin: 'planner UI' },
-      settings: {
-        trials: +$('trials').value,
-        seed: +$('seed').value,
-        volatility: +$('volatility').value / 100,
-        mode: 'parametric',
-      },
+      settings: simulationSettings(),
     });
     pollJob(data.job.id, JSON.stringify(plan));
     watchSavedRun(data.job.id).catch(e => tell(e.message, true));
@@ -84,6 +92,13 @@ async function pollJob(id, inputSnapshot) {
     $('simulation-result').textContent = e.message;
     tell(e.message, true);
   }
+}
+// A bad-start test is one path, so it reads as pass or fail rather than a percentage.
+function stressSummary(r) {
+  const path = r.paths?.[0],
+    held = r.outcomes?.essential_spending_funded?.rate === 1,
+    short = path?.first_shortfall_year;
+  return `<p class="notice${held ? '' : ' error'}">${held ? 'Your plan holds through a bad start to retirement' : `A bad start to retirement leaves essential spending short${short ? ` from plan year ${short} (around age ${+plan.age + short - 1})` : ''}`}: ${(r.metadata.settings.shock_returns || []).map(v => pct(v)).join(', ')} real in the first retirement years, ending with ${money(path?.ending_balance)}.</p>`;
 }
 function renderSimulation(r) {
   const funded = r.outcomes?.essential_spending_funded,
@@ -115,5 +130,6 @@ function renderSimulation(r) {
   }
   svg += '</svg>';
   $('simulation-result').innerHTML =
+    (r.metadata?.settings?.mode === 'sequence' ? stressSummary(r) : '') +
     `${r.status === 'no_complete_periods' ? '<p class="notice error">No complete historical periods cover the selected horizon. Shorter or incomplete windows were not counted as successes.</p>' : ''}<div class="sim-outcome"><span>ESSENTIAL SPENDING FUNDED</span><strong>${esc(rate)}</strong><small>${funded?.numerator == null || funded?.denominator == null ? 'Outcome data unavailable' : `${funded.numerator} of ${funded.denominator} modeled paths`}${funded?.excluded ? ` · ${funded.excluded} excluded` : ''}</small></div><div class="sim-stats"><div>Total ending assets median <strong>${money(r.ending_assets?.median)}</strong></div><div>10th–90th percentile <strong>${money(r.ending_assets?.p10)} – ${money(r.ending_assets?.p90)}</strong></div><div>Portfolio survives <strong>${r.outcomes?.portfolio_survives?.rate == null ? '—' : pct(r.outcomes.portfolio_survives.rate)}</strong></div><div>Desired lifestyle funded <strong>${r.outcomes?.desired_lifestyle_funded?.rate == null ? '—' : pct(r.outcomes.desired_lifestyle_funded.rate)}</strong></div>${r.outcomes?.spending_cuts ? `<div>Paths that cut discretionary spending <strong>${pct(r.outcomes.spending_cuts.rate)}</strong></div><div>Median lowest discretionary spending <strong>${pct(r.outcomes.spending_cuts.median_lowest_factor)} of plan</strong></div>` : ''}</div>${bands.length ? `<div class="simulation-band-chart">${svg}<small>Year ${bands[0].year} through ${bands[bands.length - 1].year} · includes property and restricted assets</small></div>` : ''}`;
 }
