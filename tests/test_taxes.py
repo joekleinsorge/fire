@@ -100,6 +100,20 @@ class TaxTests(unittest.TestCase):
         self.assertAlmostEqual(with_ss["summary"]["ending_assets"], manual["summary"]["ending_assets"], places=6)
         self.assertGreater(with_ss["tax_analysis"]["annual"][0]["taxable_social_security"], 0)
 
+    def test_spousal_and_survivor_benefits_are_taxed_as_social_security(self):
+        accounts = [dict(id="ira", type="retirement", balance=900000, return_rate=0, available=True, tax_treatment="pretax")]
+        benefits = [dict(id="me", birth_year=1960, pia_at_fra=3000, claim_age_years=67, owner="self"),
+                    dict(id="you", birth_year=1960, pia_at_fra=1000, claim_age_years=67, owner="partner")]
+        plan = self.plan(age=67, retirement_age=67, horizon=2, partner=dict(age=67, life_expectancy=68),
+                         accounts=accounts, streams=[dict(kind="expense", amount=7000)], social_security=benefits)
+        result = project(plan)
+        months = result["monthly"]
+        # Both alive: 3000 + 1000 + 500 spousal excess; after the partner dies, the survivor keeps 3000.
+        self.assertAlmostEqual(months[0]["income"] + months[0]["income_taxes"], 4500, places=6)
+        self.assertAlmostEqual(months[13]["income"] + months[13]["income_taxes"], 3000, places=6)
+        self.assertTrue(any("survivor filing status" in w for w in result["warnings"]))
+        self.assertGreater(result["tax_analysis"]["annual"][0]["taxable_social_security"], 0)
+
     def test_basis_deposits_and_tax_year_reset(self):
         p = self.plan(
             valuation_date="2026-10-15",

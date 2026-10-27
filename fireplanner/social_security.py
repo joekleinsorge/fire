@@ -48,6 +48,30 @@ def _months(birth_year, claim, late_attainer=False):
     return max(0, reduction - late_attainer), max(0, claim - fra)
 
 
+def spousal_factor(months_early):
+    """Share of the base spousal benefit (half the worker's PIA) after early claiming.
+
+    Reduced 25/36 of 1% for each of the first 36 months before full retirement age and
+    5/12 of 1% for each further month; no delayed credits apply (SSA Handbook section 724;
+    POMS RS 00615.201)."""
+    first = min(max(months_early, 0), 36)
+    return 1 - (first * 25 / 36 + max(0, months_early - 36) * 5 / 12) / 100
+
+
+def spousal_excess(spouse, worker):
+    """Monthly spousal excess for `spouse` on `worker`'s record and the month it starts.
+
+    Paid on top of the spouse's own benefit once both have filed: half the worker's PIA
+    less the spouse's own PIA, reduced for the spouse's age when it starts."""
+    excess = .5 * worker['pia_at_fra'] - spouse['pia_at_fra']
+    if excess <= 0:
+        return 0.0, None
+    start = max(spouse['start_month'], worker['start_month'])
+    age = spouse['claim_age_years'] * 12 + spouse['claim_age_months'] + start - spouse['start_month']
+    fra = spouse['full_retirement_age_years'] * 12 + spouse['full_retirement_age_months']
+    return excess * spousal_factor(fra - age), start
+
+
 def comparison(birth_year, pia, late_attainer=False):
     fra = full_retirement_age_months(birth_year)
     rows = []
@@ -64,9 +88,11 @@ def normalize(plan, age, horizon_months, valuation, number):
     Month 1 is the calendar month after the valuation month. With a birth_date the
     benefit starts in the first month the person has attained the claiming age (for a
     reduced benefit, the first month they are that age throughout). With only a
-    birth_year the person is taken to be exactly plan age at valuation, matching how
-    retirement_age maps to projection months.
+    birth_year the person is taken to be exactly their age at valuation (plan age, or the
+    result of `age` when it is a function of the row), matching how retirement_age maps to
+    projection months.
     """
+    age_of = age if callable(age) else (lambda row: age)
     rows = plan.get('social_security', [])
     if not isinstance(rows, list) or len(rows) > 10 or any(not isinstance(row, dict) for row in rows):
         raise ValueError('social_security must be a bounded list of objects')
@@ -104,7 +130,7 @@ def normalize(plan, age, horizon_months, valuation, number):
             offset = (attained.year - valuation.year) * 12 + attained.month - valuation.month
             start = offset + claim + (late and claim < full_retirement_age_months(birth_year))
         else:
-            start = claim - age * 12 + 1
+            start = claim - age_of(row) * 12 + 1
         start = min(max(1, start), horizon_months + 1)
         factor = benefit_factor(reduction, credits)
         result.append(dict(id=ident, name=row.get('name') if isinstance(row.get('name'), str) else None,
